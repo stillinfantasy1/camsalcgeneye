@@ -1,0 +1,133 @@
+---
+title: 'EBR calculation'
+author: "joe zimmerman"
+date: "2024-02-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load libraries, set subject(s) and input paths
+```{r}
+library(pacman)
+p_load(eyelinker, intervals, stringr, readr, dplyr, ggplot2, PupillometryR, PupilPre, shiny, tidyverse, stringr, emmeans, sjPlot, nlme, patchwork, purrr, ggpubr, lme4, psych, zoo)
+
+subjects <- c('L021', 'L022','L024','L026','L028','H001', 'H002', 'H003','L003','L004','L006',
+              'L007','L009','L013','L014','L015','L017','L019', 'L031')
+
+# Indicate old or new task code
+one_edf <- c('H001', 'H002', 'H003','L003','L004','L006','L007','L009','L013','L014','L015','L017','L019')
+split_edf <- c('L021', 'L022','L024','L025','L026','L028','L029','L031')
+
+# Indicate sample rate: default is 500 hz
+s_250 <- c('H002','H003','L013','L014','L015','L017','L019','L023')
+s_1000 <- c('L025', 'L031')
+
+ebr_df <- data.frame(row.names = c("subject", "ebr", "time_recorded"))
+
+```
+
+# Loop through subjects calculating EBR and appending to dataframe
+```{r}
+for (subject in subjects) {
+  
+  # For multiple EDFs
+  if (subject %in% split_edf) {
+    base_path <- "/Users/josephzimmerman/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+    input_path <- file.path(base_path, "pupillometry", "raw_asc", subject, sprintf("%s_se.asc", subject))
+    df <- read.asc(input_path)
+  }
+  
+  # For one giant EDF
+  if (subject %in% one_edf) {
+    base_path <- "/Users/josephzimmerman/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+    input_path <- file.path(base_path, "pupillometry", "raw_asc", sprintf("%s.asc", subject))
+    df <- read.asc(input_path)
+  
+    df[["blinks"]] <- df[["blinks"]][df[["blinks"]]$block == 1, ]
+    df[["raw"]] <- df[["raw"]][df[["raw"]]$block == 1, ]
+    df[["fix"]] <- df[["fix"]][df[["fix"]]$block == 1, ]
+  }
+  
+  # Add a column for the instantaneous velocity of gaze position
+  df$raw <- df$raw %>%
+    mutate(velocity = 1000 * sqrt((xp - lag(xp))^2 + (yp - lag(yp))^2) / (time - lag(time)))
+  
+  # Find the percentage of the total se period spend on fixations and saccade movements
+  total_fix_dur <- sum(df$fix$dur)
+  total_move_dur <- 240000 - total_fix_dur - sum(df$blinks$dur)
+  
+  # Find the percentage of recorded samples spent on fixations
+  fixation_percent <- total_fix_dur / (total_fix_dur + total_move_dur)
+  
+  # Use the percentages of saccades and fixations to find the minimum velocity threshold for a saccade
+  vel_threshold <- quantile(df$raw$velocity, probs = fixation_percent, na.rm = TRUE)
+  
+  for (i in 2:nrow(df$raw)) {
+    # Check if velocity value of current row is NA and previous row's velocity value is NOT NA
+    if (is.na(df$raw$velocity[i]) && !is.na(df$raw$velocity[i - 1])) {
+        
+      if (subject %in% s_250) {
+        avg_velocity <- mean(df$raw$velocity[(i - 2): (i - 1)], na.rm = TRUE)
+      } else if (subject %in% s_1000) {
+        avg_velocity <- mean(df$raw$velocity[(i - 8): (i - 1)], na.rm = TRUE)
+      } else {
+        avg_velocity <- mean(df$raw$velocity[(i - 4): (i - 1)], na.rm = TRUE)
+      }
+      # Set the velocity value of the current row to the calculated average
+      df$raw$velocity[i] <- avg_velocity
+    }
+  }
+  
+  # Merge the velocity column from raw onto blinks based on the "time" and "stime" columns
+  merged_df <- merge(df$blinks, df$raw[c("time", "velocity")], by.x = "stime", by.y = "time", all.x = TRUE)
+  
+  # Filter based on length
+  # Hartley et. al. (2019) uses the conservative threshold of 100-500 ms for blink duration. This is effective
+  #   when paired with velocity filtering. Hollander & Huette (2022) use 100-400 ms.
+  min_dur <- 50
+  max_dur <- 500
+  len_filtered_df <- merged_df %>%
+    filter(dur >= min_dur, dur <= max_dur)
+  
+  # Filter based on velocity
+  # The velocity threshold is the percentile of all recorded velocities corresponding to the percent of the
+  #   total data that are fixations. So the threshold should represent the minimum velocity recorded during
+  #   a saccades, which any true blink should clear.
+  vel_filtered_df <- len_filtered_df %>%
+    filter(velocity >= vel_threshold)
+  
+  # Calculate the length of time recorded by excluding the length of the non-blink gaps
+  excluded_gap_total <- sum(merged_df$dur, na.rm = TRUE) - sum(vel_filtered_df$dur, na.rm = TRUE)
+  time_recorded <- (240000 - excluded_gap_total) / 1000 # Total milliseconds of 4 minute period, then put into seconds
+  
+  # Calculate the spontaneous EBR from the number of valid blinks and the length of time recorded
+  subject_ebr <- (nrow(vel_filtered_df) * 60) / time_recorded
+  print(paste(subject, ": ", subject_ebr, "blinks per minute"))
+  
+  # Add this data to the total dataframe
+  new_row <- data.frame(subject = subject, ebr = subject_ebr, time_recorded = time_recorded)
+  ebr_df <- rbind(ebr_df, new_row)
+  
+}
+
+```
+
+# Print a summary of the EBR distribution and plot a histogram
+```{r}
+
+# Print the mean and standard deviation
+print(paste("Mean: ", mean(ebr_df$ebr), " blinks per second"))
+print(paste("Standard Deviation: ", sd(ebr_df$ebr)))
+
+# Plot a histogram of the distribution of ebr values
+ggplot(ebr_df, aes(x = ebr)) +
+  geom_histogram(binwidth = 3, fill = "skyblue", color = "black") +
+  labs(title = "Distribution of EBR Values",
+       x = "Eye-blink rate (blinks per minute)",
+       y = "Frequency") +
+  theme_minimal()
+
+```

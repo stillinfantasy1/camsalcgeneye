@@ -1,0 +1,697 @@
+---
+title: "Step3_preproc"
+author: "zihan bai"
+date: "2023-12-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+# Load necessary packages
+```{r }
+# install.packages("pacman)
+library(pacman)
+p_load(readr, dplyr, ggplot2, PupillometryR, tidyverse, stringr, psych, gridExtra)
+```
+
+# Conditioning
+## CS onset
+
+```{r}
+rm(list = ls())
+
+# If work on Mac
+base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+# If work on Windows
+# base_path <- "C:/Users/Zihan/Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+# Input
+trial_split_path <- file.path(base_path, "pupillometry", "restructured", "trial_split")
+# Output
+preproc_path <- file.path(base_path, "pupillometry", "preprocessed")
+if (!dir.exists(preproc_path)) {
+  dir.create(preproc_path)
+}
+
+# Which subjects?
+subjects <- c('L009')
+excl_subjects <- c('L025')
+
+# In what sample rate?
+s_rate_500 <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
+s_rate_250 <- c('L013', 'L014', 'L015', 'L017', 'L019', 'H002', 'H003')
+s_rate_1000 <- c('L025', 'L031')
+
+# Store raw data for all subjects
+
+
+append_cond_cs_1000 <- list()
+append_cond_cs_1000_path <- file.path(preproc_path, 'pupil_size', 'append_cond_cs_1000.RData')
+if (file.exists(append_cond_cs_1000_path)) {
+  load(append_cond_cs_1000_path)
+}
+
+append_cond_cs_250 <- list()
+append_cond_cs_250_path <- file.path(preproc_path, 'pupil_size', 'append_cond_cs_250.RData')
+if (file.exists(append_cond_cs_250_path)) {
+  load(append_cond_cs_250_path)
+}
+
+preprocessed_cond_cs_path <- file.path(preproc_path, 'pupil_size', paste0('preprocessed_cond_cs.RData'))
+
+```
+
+## 500 hz
+``` {r }
+rm(list = ls())
+
+# If work on Mac
+base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+# If work on Windows
+# base_path <- "C:/Users/Zihan/Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+# Input
+trial_split_path <- file.path(base_path, "pupillometry", "restructured", "trial_split")
+# Output
+preproc_path <- file.path(base_path, "pupillometry", "preprocessed")
+if (!dir.exists(preproc_path)) {
+  dir.create(preproc_path)
+}
+append_cond_cs <- list()
+append_cond_cs_path <- file.path(preproc_path, 'pupil_size', 'append_cond_cs.RData')
+if (file.exists(append_cond_cs_path)) {
+  load(append_cond_cs_path)
+}
+
+# Which subjects?
+subjects <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
+excl_subjects <- c('L025')
+
+# In what sample rate?
+s_rate_500 <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
+s_rate_250 <- c('L013', 'L014', 'L015', 'L017', 'L019', 'H002', 'H003')
+s_rate_1000 <- c('L025', 'L031')
+
+for (subject in subjects) {
+  input_path <- file.path(trial_split_path, subject, paste0(subject, "_cond_split.RData"))
+  data <- load(input_path)
+  
+  cs_onset <- subject_phases_list$cs_onset %>%
+    rename(trial = trial_num) %>%
+    group_by(trial) %>%
+      mutate(time = row_number() - 500 - 1) %>%
+      ungroup()
+    
+    append_cond_cs[[subject]] <- cs_onset
+}
+save(append_cond_cs, file = append_cond_cs_path)
+
+# Get the dataframe to work on
+append_cond_cs_df <- bind_rows(append_cond_cs)
+
+cs_onset_raw <- append_cond_cs %>%
+  filter(time>=0)
+
+Sdata <- make_pupillometryr_data(data = cs_onset_raw,
+                                 subject = subject,
+                                 trial = trial,
+                                 time = time,
+                                 condition = stim)
+
+# Downsample
+downsamp_data <- downsample_time_data(data = Sdata,
+                                      pupil = ps,
+                                      timebin_size = 10,
+                                      option = 'mean')
+
+# Exclude trials with >75% missing values
+missing <- calculate_missing_data(downsamp_data, pupil = ps)
+excl_data <- clean_missing_data(downsamp_data,
+                                pupil = ps,
+                                trial_threshold = .75,
+                                subject_trial_threshold =.75)
+
+# Linear interpolation
+int_data <- interpolate_data(data = excl_data,
+                             pupil = ps,
+                             type = 'linear')
+
+int_data <- int_data %>%
+  mutate(time = Timebin / 100 * 2) %>%
+  select(-Timebin)
+
+# Baseline correction by 1s of prestimulus fixation period
+base_data <- append_cond_cs_df %>%
+  filter(time>=-500 & time<=0) %>%
+  group_by(subject, trial) %>%
+  summarise(baseline = mean(ps, na.rm =TRUE)) %>%
+  ungroup()
+
+
+processed_data <- int_data %>%
+  left_join(base_data, by = c("subject", "trial")) %>%
+  mutate(ps_cor = ps-baseline)
+```
+
+```{r}
+# Save the preprocessed data
+save(processed_data, file = preprocessed_cond_cs_path)
+```
+
+
+```{r}
+# baseline pupil check
+base_check <- cs_onset %>%
+  filter(time >= -1000, time < 0) %>%
+  group_by(trial) %>%
+  summarise(baseline_pupil_size = mean(ps, na.rm = TRUE)) %>%
+  mutate(baseline_z = (baseline_pupil_size - mean(baseline_pupil_size, na.rm = TRUE)) / sd(baseline_pupil_size, na.rm = TRUE)) %>%
+  ungroup()
+
+filtered_cs_onset <- base_check %>%
+  filter(baseline_z <= 2 & baseline_z >= -2)
+
+ggplot(filtered_cs_onset, aes(x = baseline_z)) +
+  geom_histogram() +
+  geom_vline(aes(xintercept = mean(baseline_z, na.rm = TRUE)), color = "red", linetype = "dashed", size = 1) +
+  theme_minimal()
+
+ggplot(base_check, aes(x = baseline_pupil_size)) +
+  geom_histogram() +
+  geom_vline(aes(xintercept = mean(baseline_pupil_size, na.rm = TRUE)), color = "red", linetype = "dashed", size = 1) + 
+  annotate("text", x = mean(base_check$baseline_pupil_size, na.rm = TRUE), y = 5, 
+           label = sprintf("Mean: %.2f", mean(base_check$baseline_pupil_size, na.rm = TRUE)), 
+           color = "red", vjust = -1) +
+  theme_minimal()
+
+
+# stimulus presention pupil check
+stimulus_check <- cs_onset %>%
+  filter(time >= 0, time <= 1500) %>%
+  group_by(trial) %>%
+  summarise(baseline_pupil_size = mean(ps, na.rm = TRUE))
+
+ggplot(stimulus_check, aes(x = baseline_pupil_size)) +
+  geom_histogram() +
+  geom_vline(aes(xintercept = mean(baseline_pupil_size, na.rm = TRUE)), color = "red", linetype = "dashed", size = 1) + 
+  annotate("text", x = mean(stimulus_check$baseline_pupil_size, na.rm = TRUE), y = 5, 
+           label = sprintf("Mean: %.2f", mean(stimulus_check$baseline_pupil_size, na.rm = TRUE)), 
+           color = "red", vjust = -1) +
+  theme_minimal()
+
+```
+
+
+## 1000 hz
+``` {r }
+rm(list = ls())
+
+# If work on Mac
+base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+# If work on Windows
+# base_path <- "C:/Users/Zihan/Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+# Input
+trial_split_path <- file.path(base_path, "pupillometry", "restructured", "trial_split")
+# Output
+preproc_path <- file.path(base_path, "pupillometry", "preprocessed")
+if (!dir.exists(preproc_path)) {
+  dir.create(preproc_path)
+}
+append_cond_cs_1000 <- list()
+append_cond_cs_1000_path <- file.path(preproc_path, 'pupil_size', 'append_cond_cs_1000.RData')
+if (file.exists(append_cond_cs_1000_path)) {
+  load(append_cond_cs_1000_path)
+}
+
+# Which subjects?
+subjects <- c('L031')
+excl_subjects <- c('L025')
+
+# In what sample rate?
+s_rate_500 <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
+s_rate_250 <- c('L013', 'L014', 'L015', 'L017', 'L019', 'H002', 'H003')
+s_rate_1000 <- c('L025', 'L031')
+
+for (subject in subjects) {
+  input_path <- file.path(trial_split_path, subject, paste0(subject, "_cond_split.RData"))
+  data <- load(input_path)
+  
+  cs_onset <- subject_phases_list$cs_onset %>%
+    rename(trial = trial_num) %>%
+    group_by(trial) %>%
+      mutate(time = row_number() - 1000 - 1) %>%
+      ungroup()
+    
+    append_cond_cs_1000[[subject]] <- cs_onset
+}
+save(append_cond_cs_1000, file = append_cond_cs_1000_path)
+
+# Get the dataframe to work on
+append_cond_cs_1000_df <- bind_rows(append_cond_cs_1000)
+
+cs_onset_raw <- append_cond_cs_1000_df %>%
+  filter(time>=0)
+
+Sdata <- make_pupillometryr_data(data = cs_onset_raw,
+                                 subject = subject,
+                                 trial = trial,
+                                 time = time,
+                                 condition = stim)
+
+# Downsample
+downsamp_data <- downsample_time_data(data = Sdata,
+                                      pupil = ps,
+                                      timebin_size = 20,
+                                      option = 'mean')
+
+# Exclude trials with >75% missing values
+missing <- calculate_missing_data(downsamp_data, pupil = ps)
+excl_data <- clean_missing_data(downsamp_data,
+                                pupil = ps,
+                                trial_threshold = .75,
+                                subject_trial_threshold =.75)
+
+# Linear interpolation
+int_data <- interpolate_data(data = excl_data,
+                             pupil = ps,
+                             type = 'linear')
+
+int_data <- int_data %>%
+  mutate(time = Timebin / 100 * 2) %>%
+  select(-Timebin)
+
+# Baseline correction by 1s of prestimulus fixation period
+base_data <- append_cond_cs_1000_df %>%
+  filter(time>=-1000 & time<=0) %>%
+  group_by(subject, trial) %>%
+  summarise(baseline = mean(ps, na.rm =TRUE)) %>%
+  ungroup()
+
+
+processed_data <- int_data %>%
+  left_join(base_data, by = c("subject", "trial")) %>%
+  mutate(ps_cor = ps-baseline)
+```
+
+```{r}
+# Save the preprocessed data
+preprocessed_cond_cs_1000_path <- file.path(preproc_path, 'pupil_size', paste0('preprocessed_cond_cs_1000.RData'))
+save(processed_data, file = preprocessed_cond_cs_1000_path)
+```
+
+## 250 hz
+``` {r }
+rm(list = ls())
+
+# If work on Mac
+base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+# If work on Windows
+# base_path <- "C:/Users/Zihan/Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+# Input
+trial_split_path <- file.path(base_path, "pupillometry", "restructured", "trial_split")
+# Output
+preproc_path <- file.path(base_path, "pupillometry", "preprocessed")
+if (!dir.exists(preproc_path)) {
+  dir.create(preproc_path)
+}
+
+append_cond_cs_250 <- list()
+append_cond_cs_250_path <- file.path(preproc_path, 'pupil_size', 'append_cond_cs_250.RData')
+if (file.exists(append_cond_cs_250_path)) {
+  load(append_cond_cs_250_path)
+}
+
+# Which subjects?
+subjects <- c('L013', 'L014', 'L015', 'L017', 'L019', 'H002', 'H003', 'L023')
+excl_subjects <- c('L025')
+
+# In what sample rate?
+s_rate_500 <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
+s_rate_250 <- c('L013', 'L014', 'L015', 'L017', 'L019', 'H002', 'H003', 'L023')
+s_rate_1000 <- c('L025', 'L031')
+
+for (subject in subjects) {
+  input_path <- file.path(trial_split_path, subject, paste0(subject, "_cond_split.RData"))
+  data <- load(input_path)
+  
+  cs_onset <- subject_phases_list$cs_onset %>%
+    rename(trial = trial_num) %>%
+    group_by(trial) %>%
+      mutate(time = row_number() - 250 - 1) %>%
+      ungroup()
+    
+    append_cond_cs_250[[subject]] <- cs_onset
+}
+save(append_cond_cs_250, file = append_cond_cs_250_path)
+
+# Get the dataframe to work on
+append_cond_cs_250_df <- bind_rows(append_cond_cs_250)
+
+cs_onset_raw <- append_cond_cs_250_df %>%
+  filter(time>=0)
+
+Sdata <- make_pupillometryr_data(data = cs_onset_raw,
+                                 subject = subject,
+                                 trial = trial,
+                                 time = time,
+                                 condition = stim)
+
+# Downsample
+downsamp_data <- downsample_time_data(data = Sdata,
+                                      pupil = ps,
+                                      timebin_size = 5,
+                                      option = 'mean')
+
+# Exclude trials with >75% missing values
+missing <- calculate_missing_data(downsamp_data, pupil = ps)
+excl_data <- clean_missing_data(downsamp_data,
+                                pupil = ps,
+                                trial_threshold = .75,
+                                subject_trial_threshold =.75)
+
+# Linear interpolation
+int_data <- interpolate_data(data = excl_data,
+                             pupil = ps,
+                             type = 'linear')
+
+int_data <- int_data %>%
+  mutate(time = Timebin / 100 * 2) %>%
+  select(-Timebin)
+
+# Baseline correction by 1s of prestimulus fixation period
+base_data <- append_cond_cs_250_df %>%
+  filter(time>=-250 & time<=0) %>%
+  group_by(subject, trial) %>%
+  summarise(baseline = mean(ps, na.rm =TRUE)) %>%
+  ungroup()
+
+
+processed_data <- int_data %>%
+  left_join(base_data, by = c("subject", "trial")) %>%
+  mutate(ps_cor = ps-baseline)
+```
+```{r}
+# Save the preprocessed data
+preprocessed_cond_cs_250_path <- file.path(preproc_path, 'pupil_size', paste0('preprocessed_cond_cs_250.RData'))
+save(processed_data, file = preprocessed_cond_cs_250_path)
+```
+
+## Append all
+```{r}
+preprocessed_cond_cs_all <- list()
+preprocessed_path <- file.path(preproc_path, "pupil_size")
+file_names <- c("preprocessed_cond_cs.RData", "preprocessed_cond_cs_1000.RData", "preprocessed_cond_cs_250.RData")
+
+# Load each dataframe and append to the list
+for (file_name in file_names) {
+  full_file <- file.path(preprocessed_path, file_name)
+  load(full_file)
+  preprocessed_cond_cs_all[[length(preprocessed_cond_cs_all) + 1]] <- processed_data
+}
+
+preprocessed_cond_cs_all <- bind_rows(preprocessed_cond_cs_all)
+
+preprocessed_cond_cs_all_path <- file.path(preproc_path, 'pupil_size', paste0('preprocessed_cond_cs_all.RData'))
+save(preprocessed_cond_cs_all, file = preprocessed_cond_cs_all_path)
+```
+
+
+
+## US onset
+```{r}
+rm(list = ls())
+
+# If work on Mac
+base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+# If work on Windows
+# base_path <- "C:/Users/Zihan/Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+# Input
+trial_split_path <- file.path(base_path, "pupillometry", "restructured", "trial_split")
+# Output
+preproc_path <- file.path(base_path, "pupillometry", "preprocessed")
+if (!dir.exists(preproc_path)) {
+  dir.create(preproc_path)
+}
+# Which subjects?
+subjects <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
+excl_subjects <- c('L025')
+
+# In what sample rate?
+s_rate_500 <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
+s_rate_250 <- c('L013', 'L014', 'L015', 'L017', 'L019', 'H002', 'H003')
+s_rate_1000 <- c('L025', 'L031')
+
+append_cond_us <- list()
+append_cond_us_path <- file.path(preproc_path, 'pupil_size', 'append_cond_us.RData')
+if (file.exists(append_cond_us_path)) {
+  load(append_cond_us_path)
+}
+
+preprocessed_cond_us_path <- file.path(preproc_path, 'pupil_size', paste0('preprocessed_cond_us.RData'))
+if (!dir.exists(preprocessed_cond_us_path)) {
+  dir.create(preprocessed_cond_us_path)
+}
+
+for (subject in subjects) {
+  input_path <- file.path(trial_split_path, subject, paste0(subject, "_cond_split.RData"))
+  data <- load(input_path)
+  us_onset <- subject_phases_list$us_onset %>%
+    rename(trial = trial_num) %>%
+    group_by(trial) %>%
+    mutate(time = row_number() - 500 - 1) %>%
+    ungroup()
+  
+  append_cond_us[[subject]] <- us_onset
+}
+save(append_cond_us, file = append_cond_us_path)
+
+# Get the dataframe to work on
+append_cond_us_df <- bind_rows(append_cond_us)
+
+
+filtered_data <- append_cond_us_df %>%
+  filter(incong_loc == "FALSE",
+         stim != "null")
+
+Sdata <- make_pupillometryr_data(data = filtered_data,
+                                 subject = subject,
+                                 trial = trial,
+                                 time = time,
+                                 condition = stim)
+  
+
+downsamp_data <- downsample_time_data(data = Sdata,
+                                      pupil = ps,
+                                      timebin_size = 10,
+                                      option = 'mean')
+  
+# 4. Exclude trials with >75% missing values
+missing <- calculate_missing_data(downsamp_data, pupil = ps)
+excl_data <- clean_missing_data(downsamp_data,
+                                pupil = ps,
+                                trial_threshold = .75,
+                                subject_trial_threshold =.75)
+
+
+int_data <- interpolate_data(data = excl_data,
+                             pupil = ps,
+                             type = 'linear')
+
+int_data <- int_data %>%
+  mutate(time = Timebin / 100 * 2) %>%
+  select(-Timebin)
+
+base_data <- append_cond_us_df %>%
+  filter(time>=-500 & time<=0) %>%
+  group_by(subject, trial) %>%
+  summarise(baseline = mean(ps, na.rm =TRUE)) %>%
+  ungroup()
+
+processed_data <- int_data %>%
+  left_join(base_data, by = c("subject", "trial")) %>%
+  mutate(ps_cor = ps-baseline)
+
+# P_x_gaze_us_pix <- ggplot(append_cond_us_df %>% filter(time>=0), aes(x = time, y = xp, color = subject)) +
+#   geom_smooth() +
+#   theme_minimal() +
+#   scale_color_viridis_d()
+# 
+# P_x_gaze_us_dev <- ggplot(base_gaze_combined_us %>% filter(time>=0), aes(x = time, y = dev, color = subject)) +
+#   geom_smooth() +
+#   theme_classic() +
+#   scale_color_viridis_d()
+```
+
+```{r}
+# Save the preprocessed data
+save(processed_data, file = preprocessed_cond_us_path)
+```
+
+--------------------------------------------------------
+# Generalization 
+## GS onset
+```{r}
+rm(list = ls())
+
+# If work on Mac
+base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+# If work on Windows
+# base_path <- "C:/Users/Zihan/Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+# Input
+trial_split_path <- file.path(base_path, "pupillometry", "restructured", "trial_split")
+# Output
+preproc_path <- file.path(base_path, "pupillometry", "preprocessed")
+if (!dir.exists(preproc_path)) {
+  dir.create(preproc_path)
+}
+# Which subjects?
+subjects <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
+excl_subjects <- c('L025')
+
+# In what sample rate?
+s_rate_500 <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
+s_rate_250 <- c('L013', 'L014', 'L015', 'L017', 'L019', 'H002', 'H003')
+s_rate_1000 <- c('L025', 'L031')
+
+append_gen_gs <- list()
+append_gen_gs_path <- file.path(preproc_path, 'pupil_size', 'append_gen_gs.RData')
+if (file.exists(append_gen_gs_path)) {
+  load(append_gen_gs_path)
+}
+preprocessed_gen_gs_path <- file.path(preproc_path, 'pupil_size', paste0('preprocessed_gen_gs.RData'))
+
+for (subject in subjects) {
+  input_path <- file.path(trial_split_path, subject, paste0(subject, "_gen_split.RData"))
+  data <- load(input_path)
+  gs_onset <- subject_phases_list$gs_onset %>%
+    rename(trial = trial_num,
+           stim = trial_cat) %>%
+    group_by(trial) %>%
+    mutate(time = row_number() - 500 - 1) %>%
+    ungroup()
+  
+  append_gen_gs[[subject]] <- gs_onset
+}
+save(append_gen_gs, file = append_gen_gs_path)
+
+# Get the dataframe to work on
+append_gen_gs_df <- bind_rows(append_gen_gs)
+
+gs_onset_raw <- append_gen_gs_df %>%
+  filter(time >= 0)
+
+Sdata <- make_pupillometryr_data(data = gs_onset_raw,
+                                 subject = subject,
+                                 trial = trial,
+                                 time = time,
+                                 condition = stim)
+  
+downsamp_data <- downsample_time_data(data = Sdata,
+                                      pupil = ps,
+                                      timebin_size = 10,
+                                      option = 'mean')
+  
+# 4. Exclude trials with >75% missing values
+missing <- calculate_missing_data(downsamp_data, pupil = ps)
+excl_data <- clean_missing_data(downsamp_data,
+                                pupil = ps,
+                                trial_threshold = .75,
+                                subject_trial_threshold =.75)
+
+
+int_data <- interpolate_data(data = excl_data,
+                             pupil = ps,
+                             type = 'linear')
+
+int_data <- int_data %>%
+  mutate(time = Timebin / 100 * 2) %>%
+  select(-Timebin)
+
+base_data <- append_gen_gs_df %>%
+  filter(time >= -500 & time <= 0) %>%
+  group_by(subject, trial) %>%
+  summarise(baseline = mean(ps, na.rm =TRUE)) %>%
+  ungroup()
+
+processed_data <- int_data %>%
+  left_join(base_data, by = c("subject", "trial")) %>%
+  mutate(ps_cor = ps-baseline)
+```
+
+```{r}
+# Save the preprocessed data
+save(processed_data, file = preprocessed_gen_gs_path)
+```
+
+--------------------------------------------------------
+
+
+
+
+```{r}
+# # Check for blinks and missing data, and clean them
+  # blink_summary(cs_timeseries, Summary = "Event")
+  # NA_summary(prep_reye, Summary = "Event", PupilColumn = "Pupil")
+  # prep_rmblinks <- clean_blink(prep_reye, BlinkPadding = c(100, 100), Delta = 5,
+  #                               MaxValueRun = 5, NAsAroundRun = c(2,2),
+  #                               LogFile = log_blinks_path)
+  # #plot_compare_app(prep_rmblinks)
+  # 
+  # # identifies the marked blinks and adds padding around them to create a marked time window within which data may be removed. This padding is given in BlinkPadding specifying the number of milliseconds to pad on either side of the blink.
+  # # with this window, the data are examined in two passes. 
+  # # The first pass calculates a difference in pupil size between subsequent data points. If the difference is larger than the value specified in Delta, the data point is marked for removal. # The second pass attempts to identify remaining data points or islands of data points (small runs surrounded by NAs) which remain in the window
+  # prep_rmart <- clean_artifact(prep_rmblinks, MADWindow = 100, MADConstant = 2,
+  #                               MADPadding = c(200, 200), MahaConstant = 2,
+  #                               Method = "Robust", XandY = TRUE, Second = T, 
+  #                               MaxValueRun = 5, NAsAroundRun = c(2,2),
+  #                               LogFile = log_artifacts_path)
+  # # plot_compare_app(prep_rmart)
+  # # The artifcat cleaning algorithm first divides the times series into windows, the size of which is specified in milliseconds using MADWindow. Within each window the median absolute deviation (MAD) of the pupil size data is calculated. This is used to detect which windows contain extreme variability (potentially containing outliers). This is determined based on the value provided in MADConstant, which controls the sensitivity threshold. The higher the constant the more extreme value is needed to trigger cleaning. Next the identified extreme windows have padding added around them using MADPadding (again in milliseconds). Within this padded window, a multidimensional distributional distance (specifically Mahalanobis distance) is calculated. This distance can be calculated using one of two methods: Basic or Robust. The Basic method uses the standard Mahalanobis distance and the Robust uses a robust version of the Mahalanobis distance. The latter is based on Minimum Covariance Determinant (as implemented in the package robustbase), which uses a sampling method for determining multivariate location and scatter. Both the basic and robust calculations are based on multiple variables covarying with pupil size. By default, the calcuation uses the following columns: Pupil, Velocity_Y, and Acceleration_Y.
+  # 
+  # # The function will inform the user if a particular window is skipped as there are safeguards built in which will skip a given window if: 1) there are not enough data points or 2) there are not enough columns with non-zero data to estimate covariance. To determine whether a given pupil size is extreme, the argument MahaConstant is used to set the sensitivity. The default value of the parameter is 2 (standard deviations). The higher the constant, the more extreme value of the parameter is needed to trigger cleaning. Lastly, this function can optionally perform a second pass (setting Second to TRUE), which is identical to the second pass in clean_blink. This attempts to identify remaining data points or islands of data points (small runs surrounded by NAs) which remain
+  # # displays the difference in the pupil data before and after carrying out the automatic cleanup
+  # 
+  # # Linear interpolation and low-pass filtering
+  # prep_linear <- interpolate_NAs(prep_rmart, Method = "linear", XandY = T, MinData = 2)
+  # #plot_compare_app(prep_linear)
+  # prep_filter <- apply_butter(prep_linear, n = 1, W = 0.1, type = "low", plane = "z")
+  # #plot_compare_app(prep_filter)
+  # 
+  # # # consider cubic spline as it is smoother 
+  # # pupil_spline <- interpolate_NAs(pupil_rmart, Method = "spline", XandY = T, MinData = 2)
+  # # plot_compare_app(datspline) 
+  # 
+  # # Remove both skipped events and artifacts created by the filterer
+  # prep_trimmed <- trim_filtered(data = prep_filter, RmSkipped = TRUE, RmEdges = c(75, 75))
+  # #plot_compare_app(prep_trimmed)
+  # 
+  # # Convert pupil data from "area" to diameter (mm)
+  # prep_trimmed <- prep_trimmed %>%
+  #   mutate(Pupil = 8/sqrt(4326)*sqrt(Pupil))
+  # 
+  # # Check baseline and apply baseline correction
+  # check_baseline(prep_trimmed, BaselineWindow = c(-1000, 0))
+  # prep_basecorr <- baseline(prep_trimmed, BaselineWindow = c(-1000, 0), BaselineType = "Subtraction")
+  # 
+  # # downsampling
+  # check_samplingrate(prep_basecorr)
+  # ds_options(SamplingRate = 500)
+  # prep_basecorr <- downsample(prep_basecorr, SamplingRate = 500, NewRate = 50)
+  
+  # Save the preprocessed data
+
+```
+
+

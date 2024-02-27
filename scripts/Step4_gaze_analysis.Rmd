@@ -1,0 +1,201 @@
+---
+title: "AlcGen Pupil Data Analysis"
+author: "Zihan Bai"
+date: "`r Sys.Date()`"
+description: "This script analyze gaze data for the AlcGen study. It reads preprocesed data, performs cleaning and analysis, and outputs figures"
+output: html_document
+---
+
+# Set Up
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# install.packages("pacman)
+library(pacman)
+p_load(readr, dplyr, ggplot2, PupillometryR, PupilPre, shiny, tidyverse, stringr, emmeans, sjPlot, nlme, patchwork, psych)
+
+```
+
+```{r}
+rm(list = ls())
+# Which subjects?
+subjects <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020')
+
+# In what sample rate?
+s_rate_500 <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001')
+s_rate_250 <- c('L013', 'L014', 'L015', 'L017', 'L019', 'H002', 'H003')
+
+# Define paths
+base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+output_gaze_path <- file.path(base_path, "pupillometry", "preprocessed", "gaze")
+if (!dir.exists(output_gaze_path)) {
+  dir.create(output_gaze_path)
+}
+
+gaze_cond_base_path <- file.path(output_gaze_path, "gaze_cond_baseline.RData")
+gaze_cond_base <- list()
+if (file.exists(gaze_cond_base_path)) {
+  load(gaze_cond_base_path)
+}
+
+gaze_cond_ant_path <- file.path(output_gaze_path, "gaze_cond_ant.RData")
+gaze_cond_ant <- list()
+if (file.exists(gaze_cond_ant_path)) {
+  load(gaze_cond_ant_path)
+}
+```
+
+## anticipation
+```{r}
+for (subject in subjects) {
+  ant_input_path <- file.path(base_path, "pupillometry", "restructured", "trial_split", subject, paste0(subject, "_cond_ant.RData"))
+  fix_input_path <- file.path(base_path, "pupillometry", "restructured", "trial_split", subject, paste0(subject, "_cond_fix.RData"))
+  
+  cond_gaze <- load(ant_input_path)
+  ant <- ant %>%
+    filter(!is.na(incong_loc)) %>%
+    rename(trial = trial_num) %>%
+    group_by(trial) %>%
+    mutate(time_adj = row_number(),
+           time = (time_adj - 1) / 1000 * 2) %>%
+    ungroup() %>%
+    select(subject, time, xp, yp, ps, trial, stim, incong_loc, us_loc, choice, surprise_us)
+  
+  # # identify a window that closely approximates the central fixation point on a visual display, while simultaneously ensuring that the data from all trials remain within the usable range.
+  left_bound <- 807.37
+  right_bound <- 1133.62
+  center_fixation <- (right_bound + left_bound) / 2
+  base_threshold <- 160 # test
+  base_left <- center_fixation - base_threshold
+  base_right <- center_fixation + base_threshold
+
+  # # apply the threshold
+  # # fixation as baseline
+  cond_fix <- load(fix_input_path)
+  fix <- fix %>%
+    filter(!is.na(incong_loc),
+           between(xp, base_left, base_right)) %>%
+    rename(trial = trial_num) %>%
+    group_by(trial) %>%
+    mutate(time = row_number()) %>%
+    summarize(fix_median = median(xp, na.rm = TRUE)) %>%
+    ungroup() %>%
+    select(trial, fix_median)
+
+  # gaze_cond_base[[subject]] <- fix
+
+  # # merge the baseline and anticipation
+  ant_corr <- ant %>%
+    left_join(fix, by = "trial")
+  
+  # compute median during anticipation
+  ant_median <- ant_corr %>%
+    group_by(trial) %>%
+    mutate(time = row_number()) %>%
+    summarize(ant_median = median(xp, na.rm = TRUE)) 
+  
+  ant_corr <- ant_corr %>%
+    left_join(ant_median, by = "trial")
+  
+  # # define midpoints of target regions
+  # x_ROI = c(337.365, 663.615, center_fixation, 1277.37, 1603.62)
+  # left_ROI_midpoint = (x_ROI[1] + x_ROI[2]) / 2
+  # right_ROI_midpoint = (x_ROI[4] + x_ROI[5]) / 2
+  
+  # normalize gaze x to the baseline median
+  # loc_opts = c("left", "right")
+  
+  
+  
+  ant_norm <- ant_corr %>%
+    # figure out expected position of US
+    mutate(expect_loc = ifelse(stim == "null", "none",
+                               ifelse(incong_loc == "FALSE", us_loc,
+                                      ifelse(us_loc=="right", "left",
+                                             ifelse(us_loc=="left", "right", NA))))) %>%
+    mutate(xp_norm.fix = 100 * (xp - fix_median) / fix_median,
+           xp_norm.ant = xp - ant_median,   # positive = right, negative = left
+           towardness.fix = ifelse(expect_loc=="left", -1 * xp_norm.fix, 
+                               ifelse(expect_loc=="right", xp_norm.fix,
+                                           ifelse(expect_loc == "none", NA, NA))),
+           towardness.ant = ifelse(expect_loc=="left", -1 * xp_norm.ant, 
+                               ifelse(expect_loc=="right", xp_norm.ant,
+                                           ifelse(expect_loc == "none", NA, NA)))
+           )
+  gaze_cond_ant[[subject]] <- ant_norm
+}
+
+
+
+# # pos = right, neg = left
+#     mutate(xp_norm = 100 * (xp - fix_median) / fix_median,
+#            towardness = ifelse(expect_loc=="right", xp_norm - right_ROI_midpoint,
+#                                     ifelse(expect_loc=="left", xp_norm - left_ROI_midpoint,
+#                                            ifelse(expect_loc == "none", xp_norm, NA))))
+# save(gaze_cond_ant, file = gaze_cond_ant_path)
+#save(gaze_cond_base, file = gaze_cond_base_path)
+```
+
+```{r}
+twd_cond <- load(gaze_cond_ant_path)
+twd_cond_all <- bind_rows(gaze_cond_ant)
+
+# By normalzing the gaze position by the median gaze position during anticipation (rather than fixation), the number of positive and negative values of normalized gaze position has to be the same, or nearly the same, considering .
+sanity_check_twd <- twd_cond_all %>%
+  group_by(subject, trial) %>%
+  summarize(pos = sum(xp_norm.ant > 0, na.rm = TRUE),
+            neg = sum(xp_norm.ant < 0, na.rm = TRUE),
+            counts_equal = pos == neg,
+            deviation = ifelse(counts_equal, 0, abs(pos - neg))) %>%
+  ungroup()
+describe(sanity_check_twd$deviation)
+
+
+
+twd_cond_all_exclusion <- twd_cond_all %>%
+  left_join(sanity_check_twd, by = c("subject", "trial")) %>%
+  filter(deviation <10)
+
+# Visualize
+# Before excluding trials whose deviation between pos and neg is higher than 10
+ggplot(twd_cond_all %>% filter(stim != "null"), aes(x = time, y = towardness.ant, color = stim)) +
+  geom_smooth(se = FALSE) + theme_classic() + geom_hline(yintercept = 0)
+
+# After
+ggplot(twd_cond_all_exclusion %>% filter(stim != "null"), aes(x = time, y = towardness.ant, color = stim)) +
+  geom_smooth(se = FALSE) + theme_classic() + geom_hline(yintercept = 0)
+ 
+# Within-subjects?
+ggplot(twd_cond_all %>% filter(stim != "null"), aes(x = time, y = xp_norm.ant, color = expect_loc)) +
+  facet_wrap(~subject) +
+  geom_smooth(se = FALSE) + theme_classic() + geom_hline(yintercept = 0)
+
+# side bias?
+ggplot(twd_cond_all %>% filter(stim == "null"), aes(x = time, y = towardness, color = stim)) + geom_smooth(se = FALSE) + theme_classic() + geom_hline(yintercept = 0)
+  
+# look for reaction time for alc and neut because the time they take to move to the expected location seems different?
+
+```
+
+```{r}
+# 1. The unique expect location based on the stimulus type for each subject who might expect the us stimuli to appear in left or right locations
+
+# 3. 'Towardness' shows how accurately and strongly the subjects look towards where they expect the stimulus. If they look right where we expect, that's a high positive score. However, if they look away, it's a negative score
+cong_loc_path <- file.path(output_gaze_path, "findCongLoc.RData")
+cong_loc <- load(cong_loc_path)
+cong_loc <- cong_loc
+# Merge
+ant_exp <- ant %>%
+  left_join(cong_loc, by = c('subject', 'stim')) %>%
+  mutate(towardness = ifelse())
+  
+
+
+```
+
+
+
+
+# heatmap
+```

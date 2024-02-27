@@ -1,0 +1,131 @@
+---
+title: "cs_onset_saccades"
+author: "joe zimmerman"
+date: "2024-02-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(pacman)
+p_load(eyelinker, intervals, stringr, readr, dplyr, ggplot2, PupillometryR, PupilPre, shiny, tidyverse, stringr, emmeans, sjPlot, nlme, patchwork, purrr, ggpubr, lme4, psych)
+```
+
+# Define subjects, paths, and functions
+```{r}
+# Function to find closest time
+# Sometimes the time when a specific msg appears does not match with the time in raw samples, therefore we define a function to find he close time and merge raw and msg without losing any msgs
+find_closest_time <- function(time, df) {
+  abs_diff <- abs(df$time - time)
+  closest_time <- df$time[which.min(abs_diff)]
+  return(closest_time)
+}
+```
+
+# Load data, merge dfs, and isolate conditioning
+```{r}
+base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+preproc_path <- file.path(base_path, "pupillometry", "preprocessed")
+
+saccade_cs_onset <- list()
+saccade_cond_cs_path <- file.path(preproc_path, "pupil_size","saccade_cond_cs.RData")
+if (file.exists(saccade_cond_cs_path)) {
+  load(saccade_cond_cs_path)
+}
+
+subjects <- c("L024", "L003")
+
+single_edf <- c('H001', 'H002', 'H003','L003','L004','L006','L007','L009','L013','L014','L015','L017','L019')
+
+split_edf <- c('L021', 'L022','L024','L025','L026','L028','L029','L031')
+
+for (subject in subjects) {
+  if (subject %in% single_edf) {
+    input_path <- file.path(base_path, "pupillometry", "raw_asc", sprintf("%s.asc", subject))
+    df <- read.asc(input_path)
+    
+    # Filter the relevant dataframes to include only the conditioning blocks
+    cond_raw <- df$raw %>%
+      filter(block >= 41 & block <= 160)
+    cond_msg <- df$msg %>%
+      filter(block >= 41 & block <= 160)
+    cond_sacc <- df$sacc %>%
+      filter(block >= 41 & block <= 160)
+  } # single edf loop
+  
+  if (subject %in% split_edf) {
+    input_path1 <- file.path(base_path, "pupillometry", "raw_asc", subject, sprintf("%s_c1.asc", subject))
+    input_path2 <- file.path(base_path, "pupillometry", "raw_asc", subject, sprintf("%s_c2.asc", subject))
+    df1 <- read.asc(input_path1)
+    df2 <- read.asc(input_path2)
+    
+    # Adjust block 2 trial numbers for no overlap
+    df2$raw$block <- df2$raw$block + 60
+    df2$msg$block <- df2$msg$block + 60
+    df2$sacc$block <- df2$sacc$block + 60
+    
+    # Combine blocks 1 and 2 into a single dataframe
+    cond_raw <- bind_rows(df1$raw, df2$raw)
+    cond_msg <- bind_rows(df1$msg, df2$msg)
+    cond_sacc <- bind_rows(df1$sacc, df2$sacc)
+    
+    # Adjust trial numbers to match those from the single EDF
+    cond_raw$block <- cond_raw$block + 40
+    cond_msg$block <- cond_msg$block + 40
+    cond_sacc$block <- cond_sacc$block + 40
+  } # split edf loop
+  
+  # Shift the time of the messages and saccade onset to match the raw data times
+  cond_msg$closest_time <- sapply(cond_msg$time, find_closest_time, df = cond_raw)
+  cond_sacc$closest_time <- sapply(cond_sacc$stime, find_closest_time, df = cond_raw)
+  cond_raw$closest_time <- cond_raw$time # For merging
+  
+  # Merge the messages, saccades, and raw data into one single dataframe
+  msg_df <- merge(cond_raw, cond_msg, by = c('block', 'closest_time'), all.x = TRUE)
+  combined_df <- merge(msg_df, cond_sacc, by = c('block', 'closest_time'), all.x = TRUE)
+  
+  combined_df$time <- combined_df$closest_time
+  combined_df$subject <- subject
+  combined_df <- select(combined_df, c('subject','block', 'time', 'dur', 'text', "pv", "ampl"))
+  
+  
+  # Find the occurences of the messages "cs_onset" and "anticipation_onset". Between these messages is the cs_onset period we want to measure.
+  start_rows <- which(combined_df$text == "cs_onset")
+  end_rows <- which(combined_df$text == "anticipation_onset")
+  
+  # Initialize a new dataframe to contain only the cs_onset periods
+  cs_onset_df <- data.frame()
+  
+  for (i in 1:min(length(start_rows), length(end_rows))) {
+    # Find the row numbers for the current pair of "cs_onset" and "anticipation_onset"
+    start_row <- start_rows[i]
+    end_row <- end_rows[i]
+    
+    # Filter the dataframe for rows between the current pair of "cs_onset" and "anticipation_onset"
+    filtered_rows <- combined_df %>%
+      filter(row_number() >= start_row, row_number() < end_row)
+    
+    # Add the new rows from this pair to the total dataframe
+    cs_onset_df <- bind_rows(cs_onset_df, filtered_rows)
+  } # bind loop
+  
+  # saccades to rewarded location are initialized earlier, have faster peak velocities, and more accurate relative to saccades to unrewarded location (Dunne et al., 2015)
+  
+  # Group the raw cs onset data by trial and count the saccades in each one
+  subject_df <- cs_onset_df %>%
+    group_by(block) %>%
+    summarize(count = sum(!is.na(dur)),
+              mpv = mean(pv[!is.na(dur)], na.rm = TRUE), .groups = 'drop') %>%
+    mutate(subject = subject,
+           block = block - 40) %>%
+    rename(trial = block, sacc_count = count)
+    
+  saccade_cs_onset[[subject]] <- subject_df
+}  # subject loop
+
+# Save the data
+save(saccade_cs_onset, file = saccade_cond_cs_path)
+
+```
+

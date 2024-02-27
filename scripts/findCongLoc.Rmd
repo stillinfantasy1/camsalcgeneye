@@ -1,0 +1,35 @@
+---
+title: "findCongLoc"
+author: "Zihan Bai"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r }
+rm(list = ls())
+base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+output_path <- file.path(base_path, "pupillometry", "preprocessed", "gaze")
+if (!dir.exists(output_path)) {
+  dir.create(output_path)
+}
+behav_fname <- paste0(base_path, "/", "processed_behav", "/", "combined_conditioning_data.csv")
+behav_cond <- read_csv(behav_fname)
+
+behav_cond <- behav_cond %>%
+  select(-c(fixation_onset, cs_onset, anticipation_onset, choice_onset, feedback_onset))
+
+cong_loc <- behav_cond %>%
+  rename(subject = subId) %>%
+  select(subject, stim, incong_loc, us_loc) %>%
+  filter(stim != "null" & incong_loc == "FALSE") %>%
+  group_by(subject, stim) %>%
+  summarize(expect_loc = unique(us_loc)) %>%
+  ungroup()
+
+
+save(cong_loc, file = file.path(output_path, "findCongLoc.RData"))
+```

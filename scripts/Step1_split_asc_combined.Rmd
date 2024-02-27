@@ -1,0 +1,341 @@
+---
+title: "Step1_asc_split"
+author: "zihan bai"
+date: "2023-12-18"
+output: html_document
+---
+Step1: this script takes asc files converted from edf for each subject in , and splits them into 4 individuals files for different tasks.
+e.g. In: L003.asc -- Out: L003_cond_csv, L003_gen_csv, L003_csmem_csv, L003_usmem_csv
+
+# Setup
+```{r setup, include=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(pacman)
+p_load(eyelinker, intervals, stringr, readr, dplyr, ggplot2, PupillometryR, PupilPre, shiny, tidyverse, stringr, emmeans, sjPlot, nlme, patchwork, purrr, ggpubr, lme4, psych)
+```
+
+# Split into subject/tasks
+## v1
+
+------------------------------------------------------------------------------------------------
+Use this version if the subject has 1 giant EDF and contains 99 trials in gen task instead of 100
+```{r}
+# Function to find closest time
+# Sometimes the time when a specific msg appears does not match with the time in raw samples, therefore we define a function to find he close time and merge raw and msg without losing any msgs
+find_closest_time <- function(time, df) {
+  abs_diff <- abs(df$time - time)
+  closest_time <- df$time[which.min(abs_diff)]
+  return(closest_time)
+}
+
+# Define subjects and base paths
+subjects <- c('H002', 'H003', 'L013', 'L014', 'L015', 'L017', 'L019', 'L023')
+
+# Run on Mac:
+base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+# Run on Windows
+#base_path <- "C:/Users/Zihan/Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+asc_split_path <- file.path(base_path, "pupillometry", "restructured", "asc_split")
+if (!dir.exists(asc_split_path)) {
+  dir.create(asc_split_path)
+}
+
+# Define task phases
+task_phases <- list(
+  cond = c(41, 160),
+  gen = c(167, 265), # for v1, use 167
+  csmem = c(266, 301),
+  usmem = c(302, 409)
+)
+
+# Initialize an empty list to store data for all subjects
+all_data <- list()
+
+# Read and process data for each subject
+for (subject in subjects) {
+  input_path <- file.path(base_path, "pupillometry", "raw_asc", sprintf("%s.asc", subject))
+  df <- read.asc(input_path)
+  
+  print(paste0('Subject ', subject, ' sample rate: ', df$info$sample.rate))
+  
+  df$msg$closest_time <- sapply(df$msg$time, find_closest_time, df = df$raw)
+  df$raw$closest_time <- df$raw$time # For merging
+  
+  combined_df <- merge(df$raw, df$msg, by = c('block', 'closest_time'), all.x = TRUE)
+  
+  combined_df$time <- combined_df$closest_time
+  combined_df$subject <- subject
+  combined_df <- select(combined_df, c('subject','block', 'time', 'xp', 'yp', 'ps', 'text'))
+  
+  
+  # Store each task phase for the current subject
+  df_phase <- list()
+  for (task_name in names(task_phases)) {
+    phase_range <- task_phases[[task_name]]
+    start_trial <- phase_range[1]
+    end_trial <- phase_range[2]
+    
+    # Filter the current phase range
+    df_filtered <- combined_df %>%
+      filter(between(block, start_trial, end_trial))
+    
+    print(paste0('Subject ', subject, ': Trials found in ', task_name, ': ', n_distinct(unique(df_filtered$block))))
+    
+    # Store the filtered dataframe in df_phase with the phase name as the key
+    df_phase[[task_name]] <- df_filtered
+  }
+  
+  # Store the task phase data for the current subject in all_data
+  all_data[[subject]] <- df_phase
+  
+  subject_folder <- file.path(asc_split_path, subject)
+  if (!dir.exists(subject_folder)) {
+    dir.create(subject_folder)
+  }
+  
+  for (task_name in names(task_phases)) {
+    # DataFrame for the current subject and phase
+    df_to_save <- all_data[[subject]][[task_name]]
+    
+    # Construct the filename
+    file_name <- paste0(subject, "_", task_name, ".RData")
+    file_path <- file.path(subject_folder, file_name)
+    
+    # Save
+    save(df_to_save, file = file_path)
+  }
+  print('Completed!')
+}
+```
+
+
+## v2
+
+------------------------------------------------------------------------------------------------
+Use this version if the subject already has interim EDFs and contains 99 trials in gen task instead of 100
+```{r}
+rm(list = ls())
+
+# Function to find closest time
+# Sometimes the time when a specific msg appears does not match with the time in raw samples, therefore we define a function to find he close time and merge raw and msg without losing any msgs
+find_closest_time <- function(time, df) {
+  abs_diff <- abs(df$time - time)
+  closest_time <- df$time[which.min(abs_diff)]
+  return(closest_time)
+}
+
+# Define subjects and base paths
+subjects <- c('L025')
+
+# Run on Mac:
+base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+asc_split_path <- file.path(base_path, "pupillometry", "restructured", "asc_split")
+if (!dir.exists(asc_split_path)) {
+  dir.create(asc_split_path)
+}
+
+
+# Create a list of the different blocks the EDFs were originally split into
+blocks <- c('c1','c2','cm','g1','g2','u1','u2','se')
+
+# Create a list of the task phases as we want to name the output files
+task_phases <- c('cond','csmem','gen','usmem','fixation')
+
+# Read and process data for each subject
+for (subject in subjects) {
+  
+  # Create a folder in "asc_split" where output will go
+  subject_folder <- file.path(asc_split_path, subject)
+  if (!dir.exists(subject_folder)) {
+    dir.create(subject_folder)
+  }
+  
+  # Initiate an empty list to store all blocks for each subject
+  block_list <- list()
+  
+  # Iterate through each block (within each subject)
+  for (block in blocks) {
+    
+    # Get the dataframe from the path with the subject and block name
+    input_path <- file.path(base_path, "pupillometry", "raw_asc", subject, sprintf("%s_%s.asc", subject, block))
+    df <- read.asc(input_path)
+    
+    # Get sample rate
+    # PLEASE RECORD THIS IN THE LOG
+    print(df$info$sample.rate)
+  
+    # Merge message times with sample times (from old task code split script)
+    df$msg$closest_time <- sapply(df$msg$time, find_closest_time, df = df$raw)
+    df$raw$closest_time <- df$raw$time # For merging
+    
+    combined_df <- merge(df$raw, df$msg, by = c('block', 'closest_time'), all.x = TRUE)
+    combined_df$time <- combined_df$closest_time
+    combined_df$subject <- subject
+    combined_df <- select(combined_df, c('subject','block', 'time', 'xp', 'yp', 'ps', 'text'))
+    
+    
+    # Adjust the 'block' column values based on block type
+    if (block == 'c1') {
+      combined_df$block <- combined_df$block + 40 # cond ~ 41-160
+    } else if (block == 'c2') { 
+      combined_df$block <- combined_df$block + 100 # 40 + 60
+    } else if (block == 'g1') {
+      combined_df$block <- combined_df$block + 166 # for v2, gen ~ 166-265
+    } else if (block == 'g2') {
+      combined_df$block <- combined_df$block + 216 # for v2, 166 + 50
+    } else if (block == 'u1') {
+      combined_df$block <- combined_df$block + 301 # usmem ~ 302-409
+    } else if (block == 'u2') {
+      combined_df$block <- combined_df$block + 355 # 301 + 54
+    } else if (block == 'cm') {
+      combined_df$block <- combined_df$block + 265 # csmem ~ 266-301
+    } 
+    
+    # Store this dataframe in a list of all blocks for that subject
+    block_list[[block]] <- combined_df
+  }
+  
+  # Bind the appropriate dataframes to create 1 continuous df for cond, gen, and usmem
+  cond_df <- rbind(block_list[['c1']], block_list[['c2']])
+  gen_df <- rbind(block_list[['g1']], block_list[['g2']])
+  usmem_df <- rbind(block_list[['u1']], block_list[['u2']])
+  csmem_df <- block_list[['cm']]
+  fixation_df <- block_list[['se']]
+  
+  print(paste0('Subject ', subject, ': Trials found in conditioning task: ', n_distinct(unique(cond_df$block))))
+  print(paste0('Subject ', subject, ': Trials found in generalization task: ', n_distinct(unique(gen_df$block))))
+  print(paste0('Subject ', subject, ': Trials found in us memory task: ', n_distinct(unique(usmem_df$block))))
+  print(paste0('Subject ', subject, ': Trials found in cs memory task: ', n_distinct(unique(csmem_df$block))))
+  
+  for (phase in task_phases) {
+    # Use the phase name to get the appropriate dataframe to save
+    df_name <- paste0(phase, "_df")
+    df_to_save <- get(df_name)
+    
+    # Construct the filename
+    file_name <- paste0(subject, "_", phase, ".RData")
+    file_path <- file.path(subject_folder, file_name)
+    
+    # Save
+    save(df_to_save, file = file_path)
+  }
+  print('Completed!')
+}
+```
+
+## v3
+
+------------------------------------------------------------------------------------------------
+Use this version if the subject already has interim EDFs and contains 100 trials in gen task
+```{r}
+# Function to find closest time
+# Sometimes the time when a specific msg appears does not match with the time in raw samples, therefore we define a function to find he close time and merge raw and msg without losing any msgs
+find_closest_time <- function(time, df) {
+  abs_diff <- abs(df$time - time)
+  closest_time <- df$time[which.min(abs_diff)]
+  return(closest_time)
+}
+
+# Define subjects and base paths
+subjects <- c('L031')
+
+# Run on Mac:
+base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+asc_split_path <- file.path(base_path, "pupillometry", "restructured", "asc_split")
+if (!dir.exists(asc_split_path)) {
+  dir.create(asc_split_path)
+}
+
+
+# Create a list of the different blocks the EDFs were originally split into
+blocks <- c('c1','c2','cm','g1','g2','u1','u2','se')
+
+# Create a list of the task phases as we want to name the output files
+task_phases <- c('cond','csmem','gen','usmem', 'fixation')
+
+# Read and process data for each subject
+for (subject in subjects) {
+  
+  # Create a folder in "asc_split" where output will go
+  subject_folder <- file.path(asc_split_path, subject)
+  if (!dir.exists(subject_folder)) {
+    dir.create(subject_folder)
+  }
+  
+  # Initiate an empty list to store all blocks for each subject
+  block_list <- list()
+  
+  # Iterate through each block (within each subject)
+  for (block in blocks) {
+    
+    # Get the dataframe from the path with the subject and block name
+    input_path <- file.path(base_path, "pupillometry", "raw_asc", subject, sprintf("%s_%s.asc", subject, block))
+    df <- read.asc(input_path)
+    
+    # Get sample rate
+    # PLEASE RECORD THIS IN THE LOG
+    print(df$info$sample.rate)
+  
+    # Merge message times with sample times (from old task code split script)
+    df$msg$closest_time <- sapply(df$msg$time, find_closest_time, df = df$raw)
+    df$raw$closest_time <- df$raw$time # For merging
+    
+    combined_df <- merge(df$raw, df$msg, by = c('block', 'closest_time'), all.x = TRUE)
+    combined_df$time <- combined_df$closest_time
+    combined_df$subject <- subject
+    combined_df <- select(combined_df, c('subject','block', 'time', 'xp', 'yp', 'ps', 'text'))
+    
+    
+    # Adjust the 'block' column values based on block type
+    if (block == 'c1') {
+      combined_df$block <- combined_df$block + 40 # cond ~ 41-160
+    } else if (block == 'c2') { 
+      combined_df$block <- combined_df$block + 100 # 40 + 60
+    } else if (block == 'g1') {
+      combined_df$block <- combined_df$block + 165 # for v3, gen ~ 166-265
+    } else if (block == 'g2') {
+      combined_df$block <- combined_df$block + 215 # for v3, 165 + 50
+    } else if (block == 'u1') {
+      combined_df$block <- combined_df$block + 301 # usmem ~ 302-409
+    } else if (block == 'u2') {
+      combined_df$block <- combined_df$block + 355 # 301 + 54
+    } else if (block == 'cm') {
+      combined_df$block <- combined_df$block + 265 # csmem ~ 266-301
+    } 
+    
+    # Store this dataframe in a list of all blocks for that subject
+    block_list[[block]] <- combined_df
+  }
+  
+  # Bind the appropriate dataframes to create 1 continuous df for cond, gen, and usmem
+  cond_df <- rbind(block_list[['c1']], block_list[['c2']])
+  gen_df <- rbind(block_list[['g1']], block_list[['g2']])
+  usmem_df <- rbind(block_list[['u1']], block_list[['u2']])
+  csmem_df <- block_list[['cm']]
+  fixation_df <- block_list[['se']]
+  
+  print(paste0('Subject ', subject, ': Trials found in conditioning task: ', n_distinct(unique(cond_df$block))))
+  print(paste0('Subject ', subject, ': Trials found in generalization task: ', n_distinct(unique(gen_df$block))))
+  print(paste0('Subject ', subject, ': Trials found in us memory task: ', n_distinct(unique(usmem_df$block))))
+  print(paste0('Subject ', subject, ': Trials found in cs memory task: ', n_distinct(unique(csmem_df$block))))
+  
+  for (phase in task_phases) {
+    # Use the phase name to get the appropriate dataframe to save
+    df_name <- paste0(phase, "_df")
+    df_to_save <- get(df_name)
+    
+    # Construct the filename
+    file_name <- paste0(subject, "_", phase, ".RData")
+    file_path <- file.path(subject_folder, file_name)
+    
+    # Save
+    save(df_to_save, file = file_path)
+  }
+  print('Completed!')
+}
+```

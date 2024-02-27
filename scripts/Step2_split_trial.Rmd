@@ -1,0 +1,391 @@
+---
+title: "Step2_split_trial"
+author: "zihan bai"
+date: "2023-12-18"
+output: html_document
+---
+Step2: this script takes RData for each task in, and splits them into 4 different phases.
+e.g. In: L003_cond_csv -- Out: L003_cond_cs_onset, L003_cond_us_onset...
+
+# Setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+library(pacman)
+p_load(eyelinker, intervals, stringr, readr, dplyr, ggplot2, PupillometryR, PupilPre, shiny, tidyverse, stringr, emmeans, sjPlot, nlme, patchwork, purrr, ggpubr, lme4, psych, tools)
+```
+
+# Split conditioning trials
+```{r, echo = FALSE}
+rm(list = ls())
+
+# Run on Mac:
+base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+# Run on Windows
+#base_path <- "C:/Users/Zihan/Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+# Which subjects?
+subjects <- c('L031')
+
+# In what sample rate?
+s_rate_500 <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L025', 'L026', 'L027', 'L028', 'L029')
+s_rate_250 <- c('H002', 'H003', 'L013', 'L014', 'L015', 'L017', 'L019', 'L023')
+s_rate_1000 <- c('L025', 'L031')
+
+
+# Split
+for (subject in subjects) {
+  subject_phases_list <- list()
+  
+  # Output path
+  trial_split_path <- file.path(base_path, "pupillometry", "restructured", "trial_split", subject)
+  if (!dir.exists(trial_split_path)) {
+    dir.create(trial_split_path)
+  }
+  
+  # Load eye and behavioral files
+  behav_fname <- paste0(base_path, "/", "processed_behav", "/", "combined_conditioning_data.csv")
+  behav_cond <- read_csv(behav_fname)
+  
+  # Find that subject's behavioral data
+  behav_cond <- behav_cond %>%
+    filter(subId == subject) %>%
+    select(c(subId, phase, trial_num, us_loc, trial_cat, incong_loc, us_img, stim, iter, drink_2grp)) %>%
+    mutate(incong_loc = case_when(
+          trial_cat %in% c("alc_null_surprise", "null_alc_surprise", 
+                          "null_neut_surprise", "neut_null_surprise") ~ 'NOTHING',
+          # ignore 30% trials while congruent locs contain nothing
+          # so each cs is reinforced with the same us location in 70% of trials
+          # and with the same us image in 85% of trials
+          stim == 'null' ~ 'NOTHING',
+          TRUE ~ as.character(incong_loc)))
+
+  
+  subject_folder <- file.path(base_path, "pupillometry/restructured/asc_split", subject)
+  task_file <- paste0(subject, "_cond.RData")
+  subject_cond <- load(file.path(subject_folder, task_file))
+  df_to_save <- df_to_save %>% mutate(subject = subject, trial_num = block - 40) %>% select(-block)
+  
+  # Split into phases: fix, cs, ant, us
+  phase_name = c("fixation_onset", "cs_onset", "anticipation_onset", "us_onset")
+  
+   # sampling rate: 1 sample/2 msec (500 samples/sec); 1 sample/4 msec (250 samples/sec); 1 sample/1msec (1000 samples/sec)
+  if (subject %in% s_rate_500) {
+    samp_rate = 500
+  } else if (subject %in% s_rate_1000) {
+    samp_rate = 1000
+  } else {
+    samp_rate = 250
+  }
+  
+  phase_dur = c(3, 2, 3, 2)
+  phase_dur.adj = phase_dur*samp_rate
+  
+  baseline_dur = 1 # baseline = 1s
+  baseline_dur.adj = baseline_dur*samp_rate
+
+  # cross-check timing against sampling
+  for (p in c(1:4)) {
+    time_start <- which(grepl(phase_name[p], df_to_save$text))
+    if (p < 4) {
+      time_stop <- which(grepl(phase_name[p+1], df_to_save$text)) - 1
+    } else {
+      tmp <- which(grepl(phase_name[1], df_to_save$text))
+      time_stop <- time_start + tail(phase_dur.adj, n = 1)
+    }
+    
+    if (p == 1) {
+      phase_timing.start <- time_start
+      phase_timing.stop <- time_stop
+    } else {
+      phase_timing.start <- cbind(phase_timing.start, time_start)
+      phase_timing.stop <- cbind(phase_timing.stop, time_stop)
+    }
+  }
+  
+  phase_timing.start <- as.data.frame(phase_timing.start)
+  phase_timing.stop <- as.data.frame(phase_timing.stop)
+  names(phase_timing.start) <- phase_name
+  
+  # Summary of mean duration for each phase
+  print(paste0('Subject ', subject, ': mean fixation duration: ', mean(phase_timing.stop[,1] - phase_timing.start[,1]) / samp_rate, 's'))
+  print(paste0('Subject ', subject, ': mean cs duration: ', mean(phase_timing.stop[,2] - phase_timing.start[,2]) / samp_rate, 's'))
+  print(paste0('Subject ', subject, ': mean anticipation duration: ', mean(phase_timing.stop[,3] - phase_timing.start[,3]) / samp_rate, 's'))
+  print(paste0('Subject ', subject, ': mean us duration: ', mean_us_dur <- mean(phase_timing.stop[,4] - phase_timing.start[,4]) / samp_rate, 's'))
+  
+  # make sure equal number of timepoints per trial
+  # add baseline window
+  phase_timing.match <- phase_timing.start
+  names(phase_timing.match) <- gsub("onset", "offset", phase_name)
+  
+  phase_timing.baseline <- phase_timing.start
+  names(phase_timing.baseline) <- gsub("onset", "baseline", phase_name)
+  
+  for (k in c(1:4)) {
+    phase_timing.match[,k] <- phase_timing.match[,k] + phase_dur.adj[k]
+    phase_timing.baseline[,k] <- phase_timing.baseline[,k] - baseline_dur.adj
+    
+  }
+  
+  phase_timing <- cbind(phase_timing.start, phase_timing.match) %>%
+    cbind(phase_timing.baseline) %>%
+    mutate(trial_num = row_number())
+  
+  # Combine w behavior data to get trial numbers
+  timing_behav_merge <- merge(phase_timing, behav_cond %>% select(-c(names(behav_cond)[grepl("onset", names(behav_cond))], 'phase')), by = "trial_num") %>%
+    arrange(trial_num)
+  
+  # ---------------------------------------------------------------------------
+  # cs
+  for (e in unique(timing_behav_merge$trial_num)) {
+    trial_info <- timing_behav_merge %>%
+      filter(trial_num==e) %>%
+      select(-trial_num)
+    dat_range <- c(trial_info$cs_baseline:trial_info$cs_offset)
+    trial_eye <- df_to_save %>% slice(dat_range) %>%
+      cbind(trial_info)
+    
+    if (e == 1) {
+      cs = trial_eye
+    } else {
+      cs <- rbind(cs, trial_eye)
+    }
+    
+  }
+  
+  # fix
+  for (e in unique(timing_behav_merge$trial_num)) {
+    trial_info <- timing_behav_merge %>%
+      filter(trial_num==e) %>%
+      select(-trial_num)
+    dat_range <- c(trial_info$fixation_onset:trial_info$fixation_offset)
+    trial_eye <- df_to_save %>% slice(dat_range) %>%
+      cbind(trial_info)
+    
+    if (e == 1) {
+      fix = trial_eye
+    } else {
+      fix <- rbind(fix, trial_eye)
+    }
+  }
+  
+  # ant
+  for (e in unique(timing_behav_merge$trial_num)) {
+    trial_info <- timing_behav_merge %>%
+      filter(trial_num==e) %>%
+      select(-trial_num)
+    dat_range <- c(trial_info$anticipation_onset:trial_info$anticipation_offset)
+    trial_eye <- df_to_save %>% slice(dat_range) %>%
+      cbind(trial_info)
+    
+    if (e == 1) {
+      ant = trial_eye
+    } else {
+      ant <- rbind(ant, trial_eye)
+    }
+  }
+  
+  # us
+  for (e in unique(timing_behav_merge$trial_num)) {
+    trial_info <- timing_behav_merge %>%
+      filter(trial_num==e) %>%
+      select(-trial_num)
+    dat_range <- c(trial_info$us_baseline:trial_info$us_offset)
+    trial_eye <- df_to_save %>% slice(dat_range) %>%
+      cbind(trial_info)
+    
+    if (e == 1) {
+      us = trial_eye
+    } else {
+      us <- rbind(us, trial_eye)
+    }
+  }
+  
+  subject_phases_list$fixation <- fix
+  subject_phases_list$cs_onset <- cs
+  subject_phases_list$ant_onset <- ant
+  subject_phases_list$us_onset <- us
+
+  
+  save(subject_phases_list, file = file.path(trial_split_path, paste0(subject, "_cond_split.RData")))
+}
+```
+
+
+--------------------------------------------------------
+# Split generalization trials
+```{r, echo = FALSE, warning = FALSE}
+rm(list = ls())
+
+# Run on Mac:
+base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+# Run on Windows
+#base_path <- "C:/Users/Zihan/Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+# Which subjects?
+subjects <- c('L031')
+
+# In what sample rate?
+s_rate_500 <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L025', 'L026', 'L027', 'L028', 'L029')
+s_rate_250 <- c('H002', 'H003', 'L013', 'L014', 'L015', 'L017', 'L019', 'L023')
+s_rate_1000 <- c('L025', 'L031')
+
+
+
+for (subject in subjects) {
+  subject_phases_list <- list()
+  # Output path
+  trial_split_path <- file.path(base_path, "pupillometry", "restructured", "trial_split", subject)
+  if (!dir.exists(trial_split_path)) {
+    dir.create(trial_split_path)
+  }
+  
+  # Load behavior in generalization task
+  behav_fname <- paste0(base_path, "/", "processed_behav", "/", "combined_generalization_data.csv")
+  behav_gen <- read_csv(behav_fname)
+  behav_gen <- behav_gen %>%
+    filter(subId == subject, block!="prac") %>%
+    mutate(trial_num = row_number()) %>%
+    select(-c(anticipation_onset, anticipation_offset, gs_presentation_onset, cs_presentation_onset, cs_presentation_offset, block))
+
+  # Load eye and behavior files
+  subject_folder <- file.path(base_path, "pupillometry/restructured/asc_split", subject)
+  task_file <- paste0(subject, "_gen.RData")
+  
+  subject_gen <- load(file.path(subject_folder, task_file))
+  
+  if (subject %in% s_rate_500) {
+    samp_rate = 500
+  } else if (subject %in% s_rate_1000) {
+    samp_rate = 1000
+  } else {
+    samp_rate = 250
+  }
+  
+  # CHECK FOR V3 DATA: 
+  # -166 if using v1/v2
+  df_to_save <- df_to_save %>% mutate(subject = subject, trial_num = block - 165) %>% select(-block)
+  
+  # sampling rate: 1 sample/2 msec (500 samples/sec); 1 sample/4 msec (250 samples/sec); 1 sample/1msec (1000 samples/sec)
+  
+  
+  # Split into phases: fix, cs, ant
+  phase_name = c("fixation_onset", "gs_onset", "anticipation_onset")
+  phase_dur = c(3, 3, 3)
+  phase_dur.adj = phase_dur*samp_rate
+  
+  baseline_dur = 1 # baseline = 1s
+  baseline_dur.adj = baseline_dur*samp_rate
+
+  # cross-check timing against sampling
+  for (p in c(1:3)) {
+    time_start <- which(grepl(phase_name[p], df_to_save$text))
+    if (p < 3) {
+      time_stop <- which(grepl(phase_name[p+1], df_to_save$text)) - 1
+    } else {
+      tmp <- which(grepl(phase_name[1], df_to_save$text))
+      time_stop <- time_start + tail(phase_dur.adj, n = 1)
+    }
+    
+    if (p == 1) {
+      phase_timing.start <- time_start
+      phase_timing.stop <- time_stop
+    } else {
+      phase_timing.start <- cbind(phase_timing.start, time_start)
+      phase_timing.stop <- cbind(phase_timing.stop, time_stop)
+    }
+  }
+  
+  phase_timing.start <- as.data.frame(phase_timing.start)
+  names(phase_timing.start) <- phase_name
+  
+  
+  # Summary of mean duration for each phase
+  print(paste0('Subject ', subject, ': mean fixation duration: ', mean(phase_timing.stop[,1] - phase_timing.start[,1]) / samp_rate, 's'))
+  print(paste0('Subject ', subject, ': mean gs duration: ', mean(phase_timing.stop[,2] - phase_timing.start[,2]) / samp_rate, 's'))
+  print(paste0('Subject ', subject, ': mean anticipation duration: ', mean(phase_timing.stop[,3] - phase_timing.start[,3]) / samp_rate, 's'))
+  
+  
+  # make sure equal number of timepoints per trial
+  # add baseline window
+  phase_timing.match <- phase_timing.start
+  names(phase_timing.match) <- gsub("onset", "offset", phase_name)
+  
+  phase_timing.baseline <- phase_timing.start
+  names(phase_timing.baseline) <- gsub("onset", "baseline", phase_name)
+  
+  for (k in c(1:3)) {
+    phase_timing.match[,k] <- phase_timing.match[,k] + phase_dur.adj[k]
+    phase_timing.baseline[,k] <- phase_timing.baseline[,k] - baseline_dur.adj
+    
+  }
+  
+  phase_timing <- cbind(phase_timing.start, phase_timing.match) %>%
+    cbind(phase_timing.baseline) %>%
+    mutate(trial_num = row_number())
+  
+  # Combine w behavior data to get trial numbers
+  timing_behav_merge <- merge(phase_timing, behav_gen %>% select(-c(names(behav_gen)[grepl("onset", names(behav_gen))], 'phase')), by = "trial_num") %>%
+    arrange(trial_num)
+  
+  # ---------------------------------------------------------------------------
+  # gs
+  for (e in unique(timing_behav_merge$trial_num)) {
+    trial_info <- timing_behav_merge %>%
+      filter(trial_num==e) %>%
+      select(-trial_num)
+    dat_range <- c(trial_info$gs_baseline:trial_info$gs_offset)
+    trial_eye <- df_to_save %>% slice(dat_range) %>%
+      cbind(trial_info)
+    
+    if (e == 1) {
+      gs = trial_eye
+    } else {
+      gs <- rbind(gs, trial_eye)
+    }
+  }
+  
+  # fix
+  for (e in unique(timing_behav_merge$trial_num)) {
+    trial_info <- timing_behav_merge %>%
+      filter(trial_num==e) %>%
+      select(-trial_num)
+    dat_range <- c(trial_info$fixation_onset:trial_info$fixation_offset)
+    trial_eye <- df_to_save %>% slice(dat_range) %>%
+      cbind(trial_info)
+    
+    if (e == 1) {
+      fix = trial_eye
+    } else {
+      fix <- rbind(fix, trial_eye)
+    }
+  }
+  
+  # ant
+  for (e in unique(timing_behav_merge$trial_num)) {
+    trial_info <- timing_behav_merge %>%
+      filter(trial_num==e) %>%
+      select(-trial_num)
+    dat_range <- c(trial_info$anticipation_onset:trial_info$anticipation_offset)
+    trial_eye <- df_to_save %>% slice(dat_range) %>%
+      cbind(trial_info)
+    
+    if (e == 1) {
+      ant = trial_eye
+    } else {
+      ant <- rbind(ant, trial_eye)
+    }
+  }
+  
+  subject_phases_list$fixation <- fix
+  subject_phases_list$gs_onset <- gs
+  subject_phases_list$ant_onset <- ant
+
+  
+  save(subject_phases_list, file = file.path(trial_split_path, paste0(subject, "_gen_split.RData")))
+}
+```
+
+
+--------------------------------------------------------
+# Split memory trials
+  
