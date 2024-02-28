@@ -60,7 +60,7 @@ if (file.exists(append_cond_cs_250_path)) {
   load(append_cond_cs_250_path)
 }
 
-preprocessed_cond_cs_path <- file.path(preproc_path, 'pupil_size', paste0('preprocessed_cond_cs.RData'))
+
 
 ```
 
@@ -76,16 +76,13 @@ base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/A
 
 # Input
 trial_split_path <- file.path(base_path, "pupillometry", "restructured", "trial_split")
+
 # Output
 preproc_path <- file.path(base_path, "pupillometry", "preprocessed")
 if (!dir.exists(preproc_path)) {
   dir.create(preproc_path)
 }
-append_cond_cs <- list()
-append_cond_cs_path <- file.path(preproc_path, 'pupil_size', 'append_cond_cs.RData')
-if (file.exists(append_cond_cs_path)) {
-  load(append_cond_cs_path)
-}
+apppend_cond_cs_500 <- list()
 
 # Which subjects?
 subjects <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
@@ -95,7 +92,9 @@ excl_subjects <- c('L025')
 s_rate_500 <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
 s_rate_250 <- c('L013', 'L014', 'L015', 'L017', 'L019', 'H002', 'H003')
 s_rate_1000 <- c('L025', 'L031')
+```
 
+``` {r }
 for (subject in subjects) {
   input_path <- file.path(trial_split_path, subject, paste0(subject, "_cond_split.RData"))
   data <- load(input_path)
@@ -106,14 +105,13 @@ for (subject in subjects) {
       mutate(time = row_number() - 500 - 1) %>%
       ungroup()
     
-    append_cond_cs[[subject]] <- cs_onset
+    apppend_cond_cs_500[[subject]] <- cs_onset
 }
-save(append_cond_cs, file = append_cond_cs_path)
 
 # Get the dataframe to work on
-append_cond_cs_df <- bind_rows(append_cond_cs)
+append_cond_cs_df <- bind_rows(apppend_cond_cs_500)
 
-cs_onset_raw <- append_cond_cs %>%
+cs_onset_raw <- append_cond_cs_df %>%
   filter(time>=0)
 
 Sdata <- make_pupillometryr_data(data = cs_onset_raw,
@@ -151,7 +149,6 @@ base_data <- append_cond_cs_df %>%
   summarise(baseline = mean(ps, na.rm =TRUE)) %>%
   ungroup()
 
-
 processed_data <- int_data %>%
   left_join(base_data, by = c("subject", "trial")) %>%
   mutate(ps_cor = ps-baseline)
@@ -159,7 +156,8 @@ processed_data <- int_data %>%
 
 ```{r}
 # Save the preprocessed data
-save(processed_data, file = preprocessed_cond_cs_path)
+preprocessed_cond_cs_500_path <- file.path(preproc_path, 'pupil_size', paste0('preprocessed_cond_cs_500.RData'))
+save(processed_data, file = preprocessed_cond_cs_500_path)
 ```
 
 
@@ -224,10 +222,6 @@ if (!dir.exists(preproc_path)) {
   dir.create(preproc_path)
 }
 append_cond_cs_1000 <- list()
-append_cond_cs_1000_path <- file.path(preproc_path, 'pupil_size', 'append_cond_cs_1000.RData')
-if (file.exists(append_cond_cs_1000_path)) {
-  load(append_cond_cs_1000_path)
-}
 
 # Which subjects?
 subjects <- c('L031')
@@ -250,7 +244,6 @@ for (subject in subjects) {
     
     append_cond_cs_1000[[subject]] <- cs_onset
 }
-save(append_cond_cs_1000, file = append_cond_cs_1000_path)
 
 # Get the dataframe to work on
 append_cond_cs_1000_df <- bind_rows(append_cond_cs_1000)
@@ -293,7 +286,6 @@ base_data <- append_cond_cs_1000_df %>%
   summarise(baseline = mean(ps, na.rm =TRUE)) %>%
   ungroup()
 
-
 processed_data <- int_data %>%
   left_join(base_data, by = c("subject", "trial")) %>%
   mutate(ps_cor = ps-baseline)
@@ -324,10 +316,6 @@ if (!dir.exists(preproc_path)) {
 }
 
 append_cond_cs_250 <- list()
-append_cond_cs_250_path <- file.path(preproc_path, 'pupil_size', 'append_cond_cs_250.RData')
-if (file.exists(append_cond_cs_250_path)) {
-  load(append_cond_cs_250_path)
-}
 
 # Which subjects?
 subjects <- c('L013', 'L014', 'L015', 'L017', 'L019', 'H002', 'H003', 'L023')
@@ -350,7 +338,6 @@ for (subject in subjects) {
     
     append_cond_cs_250[[subject]] <- cs_onset
 }
-save(append_cond_cs_250, file = append_cond_cs_250_path)
 
 # Get the dataframe to work on
 append_cond_cs_250_df <- bind_rows(append_cond_cs_250)
@@ -393,11 +380,11 @@ base_data <- append_cond_cs_250_df %>%
   summarise(baseline = mean(ps, na.rm =TRUE)) %>%
   ungroup()
 
-
 processed_data <- int_data %>%
   left_join(base_data, by = c("subject", "trial")) %>%
   mutate(ps_cor = ps-baseline)
 ```
+
 ```{r}
 # Save the preprocessed data
 preprocessed_cond_cs_250_path <- file.path(preproc_path, 'pupil_size', paste0('preprocessed_cond_cs_250.RData'))
@@ -406,21 +393,21 @@ save(processed_data, file = preprocessed_cond_cs_250_path)
 
 ## Append all
 ```{r}
-preprocessed_cond_cs_all <- list()
+preprocessed_cond_cs <- list()
 preprocessed_path <- file.path(preproc_path, "pupil_size")
-file_names <- c("preprocessed_cond_cs.RData", "preprocessed_cond_cs_1000.RData", "preprocessed_cond_cs_250.RData")
+file_names <- c("preprocessed_cond_cs_500.RData", "preprocessed_cond_cs_1000.RData", "preprocessed_cond_cs_250.RData")
 
 # Load each dataframe and append to the list
 for (file_name in file_names) {
   full_file <- file.path(preprocessed_path, file_name)
   load(full_file)
-  preprocessed_cond_cs_all[[length(preprocessed_cond_cs_all) + 1]] <- processed_data
+  preprocessed_cond_cs[[length(preprocessed_cond_cs) + 1]] <- processed_data
 }
 
-preprocessed_cond_cs_all <- bind_rows(preprocessed_cond_cs_all)
+preprocessed_cond_cs <- bind_rows(preprocessed_cond_cs)
 
-preprocessed_cond_cs_all_path <- file.path(preproc_path, 'pupil_size', paste0('preprocessed_cond_cs_all.RData'))
-save(preprocessed_cond_cs_all, file = preprocessed_cond_cs_all_path)
+preprocessed_cond_cs_path <- file.path(preproc_path, 'pupil_size', paste0('preprocessed_cond_cs.RData'))
+save(preprocessed_cond_cs, file = preprocessed_cond_cs_path)
 ```
 
 

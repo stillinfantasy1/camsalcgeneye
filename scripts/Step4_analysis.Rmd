@@ -10,12 +10,15 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
 ```
 
 # Load necessary packages
+
 ```{r }
 # install.packages("pacman)
 library(pacman)
 p_load(readr, dplyr, ggplot2, PupillometryR, PupilPre, shiny, tidyverse, stringr, emmeans, sjPlot, nlme, patchwork, purrr, ggpubr, lme4,PMCMRplus, stats, zoo, splines, psych)
 ```
+
 # Paths
+
 ```{r}
 # If work on Mac
 base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
@@ -23,31 +26,33 @@ base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/A
 # If work on Windows
 # base_path <- "C:/Users/Zihan/Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
 
-# Input
-preproc_path <- file.path(base_path, "pupillometry", "preprocessed")
-# preprocessed_cond_cs_path <- file.path(preproc_path, 'pupil_size', paste0('preprocessed_cond_cs.RData'))
-# # Load existing preprocessed data if it exists
-# if (file.exists(preprocessed_cond_cs_path)) {
-#   load(preprocessed_cond_cs_path)
-# }
-
-preprocessed_cond_cs_all_path <- file.path(preproc_path, 'pupil_size', paste0('preprocessed_cond_cs_all.RData'))
-# Load existing preprocessed data if it exists
-if (file.exists(preprocessed_cond_cs_all_path)) {
-  load(preprocessed_cond_cs_all_path)
-}
-
 # Which subjects?
 subjects <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L028', 'L029', 'L013', 'L014', 'L015', 'L017', 'L019', 'H002', 'H003', 'L023', 'L031')
 
-n_distinct(subjects)
-n_distinct(preprocessed_cond_cs_all$subject)
-
 excl_subjects <- c('L025')
 ```
+
 # Conditioning
+
 ## CS onset
+
+### Load preprocessed data
+
+```{r}
+# Load preprocessed data
+preproc_path <- file.path(base_path, "pupillometry", "preprocessed")
+preprocessed_cond_cs_path <- file.path(preproc_path, 'pupil_size', paste0('preprocessed_cond_cs.RData'))
+if (file.exists(preprocessed_cond_cs_path)) {
+  load(preprocessed_cond_cs_path)
+}
+
+# Check how many subjects are ready to go
+n_distinct(subjects)
+n_distinct(preprocessed_cond_cs$subject)
+```
+
 ### Load behavior data
+
 ```{r}
 # Load behavioral data
 behav_fname <- paste0(base_path, "/", "processed_behav", "/", "combined_conditioning_data.csv")
@@ -68,20 +73,23 @@ recode_behav_cond <- behav_cond %>%
 
 n_distinct(recode_behav_cond$subject)
 ```
+
 ### Combine behavior and pupil
+
 ```{r}
-combined_cond_cs <- left_join(preprocessed_cond_cs_all, recode_behav_cond, by = c("subject", "trial", "stim"))
+combined_cond_cs <- left_join(preprocessed_cond_cs, recode_behav_cond, by = c("subject", "trial", "stim"))
 
 combined_cond_cs$subject <- as.factor(combined_cond_cs$subject)
 combined_cond_cs$time <- as.numeric(as.character(combined_cond_cs$time))
 
 # Quick check to ensure row counts are as expected
 nrow(combined_cond_cs)
-nrow(preprocessed_cond_cs_all)
+nrow(preprocessed_cond_cs)
 ```
 
 ### Pupil response after cs onset by stimulus-type
-```{r} 
+
+```{r}
 # For an aggregate view across subjects to highlight general trends rather than individual variations, we calcualte the mean size at each time point for each condition. This provides a representation of how the average pupil dilation changes over time in response to each stimulus type.
 
 # Time-course
@@ -104,14 +112,106 @@ P_trace_plot_cs <- ggplot(combined_cond_cs, aes(x = time, y = ps_cor, color = st
   geom_vline(xintercept = 1.8, linetype = "dashed", color = "grey") +
   scale_color_manual(values = c("alc" = "#A06593", "neut" = "#6086C5", "null" = "grey")) +
   theme_classic()
+print(P_trace_plot_cs)
+```
 
-# compare pre vs post incongruent trials
+```{r}
+# Save the figure
+pdf(file = 'P_trace_plot_cs.pdf', width = 8, height = 4, useDingbats = F)
+print(P_trace_plot_cs)
+dev.off()
+```
+
+### Pre/Post incongruent pupil response
+#### Method 2
+```{r}
+# Understand how pupil size changes around trials where the US location is incongruent with the usual reinforcement location.
+
+# Select distinct rows for relevant columns
+dat_per_stim <- combined_cond_cs %>%
+  select(subject, stim, trial, incong_loc) %>%
+  distinct()
+
+# Recode order per stimulus type
+dat_per_stim <- dat_per_stim %>%
+  group_by(subject, stim) %>%
+  mutate(stimrep = row_number())
+
+# Preparing incongruent trials data frames
+incong_loc_trials <- dat_per_stim %>%
+  filter(incong_loc == "TRUE") %>%
+  mutate(prerep = stimrep - 1, postrep = stimrep + 1)
+
+incong_outcome_trials <- dat_per_stim %>%
+  filter(incong_loc == "NOTHING") %>%
+  mutate(prerep = stimrep - 1, postrep = stimrep + 1)
+
+# Initialize flags
+dat_per_stim$pre_incong_loc <- 0
+dat_per_stim$post_incong_loc <- 0
+dat_per_stim$pre_incong_outcome <- 0
+dat_per_stim$post_incong_outcome <- 0
+
+# Check each trial to see if it directly precedes or follows an incongruent trial for the same subject and stimulus. If it does, flag it by 1
+for (i in 1:nrow(dat_per_stim)) {
+  current_row <- dat_per_stim[i, ]
+  # Check for pre and post incongruent location
+  if (any(incong_loc_trials$prerep == current_row$stimrep & incong_loc_trials$subject == current_row$subject & incong_loc_trials$stim == current_row$stim)) {
+    dat_per_stim$pre_incong_loc[i] <- 1
+  }
+  if (any(incong_loc_trials$postrep == current_row$stimrep & incong_loc_trials$subject == current_row$subject & incong_loc_trials$stim == current_row$stim)) {
+    dat_per_stim$post_incong_loc[i] <- 1
+  }
+  # Check for pre and post incongruent outcome
+  if (any(incong_outcome_trials$prerep == current_row$stimrep & incong_outcome_trials$subject == current_row$subject & incong_outcome_trials$stim == current_row$stim)) {
+    dat_per_stim$pre_incong_outcome[i] <- 1
+  }
+  if (any(incong_outcome_trials$postrep == current_row$stimrep & incong_outcome_trials$subject == current_row$subject & incong_outcome_trials$stim == current_row$stim)) {
+    dat_per_stim$post_incong_outcome[i] <- 1
+  }
+}
+
+pre_post_incong_loc <- combined_cond_cs %>%
+  left_join(dat_per_stim, by = c("subject", "stim", "trial", "incong_loc")) %>%
+  mutate(incong_loc_timing = case_when(
+    pre_incong_loc == 1 ~ "pre",
+    post_incong_loc == 1 ~ "post",
+    TRUE ~ as.character(NA))) %>%
+  filter(!is.na(incong_loc_timing))
+
+# Plotting
+ggplot(pre_post_incong_loc, aes(x = time, y = ps_cor, color = incong_loc_timing)) +
+  facet_grid(~ stim~drink_2grp) +
+  geom_smooth(se = TRUE) +
+  labs(x = "Time(s)", y = "Pupil Dilation", color = "Trial", title = "Pupil dilation in response to CS presentation", subtitle = "Pre/post incongruent locations") +
+  theme_minimal()
+
+pre_post_incong_out <- combined_cond_cs %>%
+  left_join(dat_per_stim, by = c("subject", "stim", "trial", "incong_loc")) %>%
+  mutate(incong_loc_timing = case_when(
+    pre_incong_outcome == 1 ~ "pre",
+    post_incong_outcome == 1 ~ "post",
+    TRUE ~ as.character(NA))) %>%
+  filter(!is.na(incong_loc_timing), stim != "null")
+
+# Plotting
+ggplot(pre_post_incong_out, aes(x = time, y = ps_cor, color = incong_loc_timing)) +
+  facet_grid(~ stim~drink_2grp) +
+  geom_smooth(se = TRUE) +
+  labs(x = "Time(s)", y = "Pupil Dilation", color = "Trial", title = "Pupil dilation in response to CS presentation", subtitle = "Pre/post incongruent outcomes") +
+  theme_minimal()
+```
+
+#### Method 1
+```{r}
+# Compare pre vs post incongruent trials
+# unique instances of trials for each subject and stimulus type, focusing on whether the trial was incongruent or not
 dat_per_stim <- combined_cond_cs %>% select(c("subject", "stim", "trial", "incong_loc")) %>% distinct()
 
-# recode order per stimulus type
+# Recode order per stimulus type
 dat_per_stim <- dat_per_stim %>% group_by(subject, stim) %>% mutate(stimrep = row_number())
 
-# flag pre/post incong
+# Flag pre/post incong. Calculate indices for the trial immediately preceding and following an incongruent trial or null trial
 incong_loc_trials <- dat_per_stim %>% filter(incong_loc=="TRUE") %>%
   mutate(prerep = stimrep-1,
          postrep = stimrep+1)
@@ -120,7 +220,7 @@ incong_outcome_trials <- dat_per_stim %>% filter(incong_loc=="NOTHING") %>%
   mutate(prerep = stimrep-1,
          postrep = stimrep+1)
 
-# add info to dat_per_stim df
+# Add info to dat_per_stim df
 for (s in sort(unique(dat_per_stim$subject))) {
   dat_sub <- dat_per_stim %>% filter(subject==s)
   incong_loc_sub <- incong_loc_trials %>% filter(subject==s)
@@ -195,15 +295,8 @@ ggplot(combined_cond_cs %>% merge(dat_sub_concat, by = c("subject", "stim", "tri
   theme_classic()
 ```
 
-```{r}
-# Save the figure
-pdf(file = 'P_trace_plot_cs.pdf', width = 8, height = 4, useDingbats = F)
-print(P_trace_plot_cs)
-dev.off()
-```
-
-
 ### Window analysis
+
 ```{r}
 # In contrast, we calculate the mean pupil changes for each condition for each subject and controls for the individual differences among subjects
 start_window <- 0.5
@@ -213,12 +306,12 @@ end_window <- 1.8
 win_cond_cs <- combined_cond_cs %>%
   filter(time >= start_window & time <= end_window,
          stim %in% c("alc", "neut", "null")) %>%
-  group_by(subject, stim, drink_2grp, trial) %>%
+  group_by(subject, stim, drink_2grp) %>%
   summarize(win_avg = mean(ps_cor, na.rm = TRUE), .groups = 'drop')
 
 P_win_cs <- ggplot(win_cond_cs, aes(x = stim, y = win_avg, fill = stim)) +
   facet_grid(~ drink_2grp) +
-  geom_violin() +
+  geom_boxplot() +
   labs(x = "US",
        y = "Mean pupil dilation",
        fill = "US") + 
@@ -235,6 +328,7 @@ dev.off()
 ```
 
 ### Within-subject pupil changes by condition
+
 ```{r}
 subject_condition_averages <- win_cond_cs %>%
   group_by(drink_2grp, subject, stim) %>%
@@ -252,6 +346,7 @@ P_win_ind_cs <- ggplot(subject_condition_averages, aes(x = stim, y = mean_ps_cor
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 print(P_win_ind_cs)
 ```
+
 ```{r}
 # Save the figure
 pdf(file = 'P_win_ind_cs.pdf', width = 4, height = 4, useDingbats = F)
@@ -260,6 +355,7 @@ dev.off()
 ```
 
 ### Split into halves
+
 ```{r}
 group_avg_cond_cs_split <- combined_cond_cs %>%
   mutate(split = case_when(iter<=20 ~ "firstH", iter>20 ~ "secondH")) %>%
@@ -304,6 +400,7 @@ P_win_cond_cs_split <- ggplot(win_cond_cs_split, aes(x = stim, y = win_avg, fill
   theme_classic()
 print(P_win_cond_cs_split)
 ```
+
 ```{r}
 # Save the figure
 pdf(file = 'P_win_cond_cs_split.pdf', width = 4, height = 4, useDingbats = F)
@@ -312,6 +409,7 @@ dev.off()
 ```
 
 ### Statistical Analysis
+
 ```{r}
 # the effects of stimulus type, drinking level, and repetition on pupil dilation.
 model_aov <- aov(mean_ps ~ stim, data = group_avg_cond_cs)
@@ -322,16 +420,16 @@ model <- lmer(ps ~ stim + (1 | subject), data = combined_cond_cs)
 
 summary(model)
 ```
+
 ### Repetition
-``` {r}
+
+```{r}
 # divide into iterations
 cond_cs_iter <- combined_cond_cs %>%
-  filter(stim %in% c("alc", "neut", "null"),
-         subject!="H001") %>%
+  filter(stim %in% c("alc", "neut", "null")) %>%
   group_by(subject, stim, iter) %>%
   summarize(avg_ps = mean(ps_cor, na.rm = TRUE)) %>%
   ungroup()
-
 
 # lm
 lm_cond_cs_iter <- lme(avg_ps ~ stim * iter, random=~1|subject, data = cond_cs_iter)
@@ -342,8 +440,6 @@ plot_model(lm_cond_cs, type = "eff", terms = c("iter", "stim"), axis.title = c("
   scale_color_manual(values = c("alc" = "#A06593", "neut" = "#6086C5", "null" = "grey")) +
   theme_classic()
 ```
-
-
 ## Towardness
 ```{r}
 # Which subjects?
@@ -399,8 +495,7 @@ for (subject in subjects) {
 append_cond_fix_df <- bind_rows(append_cond_fix)
 ```
 
-
-``` {r}
+```{r}
 gaussian_kernel <- function(sd, len = 30) {
   seq <- seq(-len/2, len/2, length.out = len)
   kernel <- dnorm(seq, mean = 0, sd = sd)
@@ -410,8 +505,6 @@ sd_points <- 5  # Standard deviation in terms of data points
 kernel <- gaussian_kernel(sd = sd_points)
 ```
 
-
-### Method 2
 ```{r}
 # Before averaging across participants, gaze time courses were smoothed by a Gaussian kernel with a 10 ms s.d. (Ede et al., 2019)
 
@@ -490,69 +583,18 @@ output_towardness_path <- file.path(base_path, "pupillometry", "preprocessed", "
 save(fix_norm, file = output_towardness_path)
 ```
 
-### Method 1
-```{r}
-ant_median <- append_cond_gaze_df %>%
-    group_by(subject, trial) %>%
-    summarize(ant_median = median(xp, na.rm = TRUE)) 
-
-ggplot(ant_median, aes(x=trial, y=ant_median, group=subject))+ geom_point(aes(color=subject)) + geom_smooth(aes(color=subject), method="loess", se=FALSE) + scale_color_viridis_d() + theme_classic()
-
-ant_corr <- append_cond_gaze_df %>%
-  left_join(ant_median, by = c("subject", "trial"))
-
-ant_norm <- ant_corr %>%
-  group_by(subject, trial) %>%
-    # figure out expected position of US
-  mutate(expect_loc = ifelse(stim == "null", "none",
-                               ifelse(incong_loc == "FALSE", us_loc,
-                                      ifelse(us_loc=="right", "left",
-                                             ifelse(us_loc=="left", "right", NA))))) %>%
-  mutate(xp_norm.ant = (xp - ant_median) / ant_median,   # positive = right, negative = left
-         towardness.ant = ifelse(expect_loc=="left", -1 * xp_norm.ant, 
-                               ifelse(expect_loc=="right", xp_norm.ant,
-                                           ifelse(expect_loc == "none", NA, NA))))
-
-sanity_check_twd <- ant_norm %>%
-  group_by(subject, trial) %>%
-  summarize(pos = sum(xp_norm.ant > 0, na.rm = TRUE),
-            neg = sum(xp_norm.ant < 0, na.rm = TRUE),
-            counts_equal = pos == neg,
-            deviation = ifelse(counts_equal, 0, abs(pos - neg))) %>%
-  ungroup()
-
-# By normalzing the gaze position by the median gaze position during anticipation (rather than fixation), the number of positive and negative values of normalized gaze position has to be the same, or nearly the same
-ggplot(sanity_check_twd, aes(x = deviation)) + geom_histogram(binwidth = 1, fill = "#6086C5", color = "black") + labs(x = "Deviation", y = "Frequency") + theme_classic()
-ggplot(sanity_check_twd, aes(x = trial, y = deviation, color = subject)) + geom_point() + geom_smooth(se = FALSE) + labs(x = "Trial", y = "Deviation") + theme_classic()
-```
-
-```{r }
-# Visualize
-ggplot(ant_norm %>% filter(stim != "null"), aes(x = time, y = towardness.ant, color = stim)) +
-  geom_smooth(se = FALSE) + theme_classic() + geom_hline(yintercept = 0)
-
-# Within-subjects?
-ggplot(twd_cond_all_exclusion %>% filter(stim != "null"), aes(x = time, y = xp_norm.ant, color = expect_loc)) +
-  facet_wrap(~subject) +
-  geom_smooth(se = FALSE) + theme_classic() + geom_hline(yintercept = 0)
-
-# side bias?
-ggplot(twd_cond_all_exclusion %>% filter(stim == "null"), aes(x = time, y = xp_norm.ant, color = stim)) + geom_smooth(se = FALSE) + theme_classic() + geom_hline(yintercept = 0)
-  
-```
-
-
 ```{r}
 # look for reaction time for alc and neut because the time they take to move to the expected location seems different?
 ```
 
-
 ## US onset (Secondary)
+
 ```{r}
 
 ```
 
 ### Pupil response after us onset by stimulus-type
+
 ```{r}
 # Time-course
 ggplot(merged_us_df, aes(x = time, y = ps_cor, group = stim, color = stim)) +
@@ -568,9 +610,11 @@ us_window <- create_window_data(combined_us_window, pupil = ps_cor)
 plot(us_window, pupil = ps_cor, windows = F, geom = 'boxplot')
 
 ```
+
 # Generalization
 ## GS onset
 ### Load behavior and pupil
+
 ```{r}
 # Which subjects?
 subjects <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
@@ -600,6 +644,7 @@ behav_gen <- read_csv(behav_fname) %>%
 ```
 
 ### Combine behavior and pupil
+
 ```{r}
 combined_gen_gs <- left_join(processed_data, behav_gen, by = c("subject", "trial", "stim"))
 
@@ -608,9 +653,10 @@ combined_gen_gs$time <- as.numeric(as.character(combined_gen_gs$time))
 # Quick check to ensure row counts are as expected
 nrow(combined_gen_gs)
 nrow(processed_data)
-``` 
+```
 
 ### Pupil response after gs onset by stimulus-type
+
 ```{r}
 # Card-evoked pupil dilation will be analyzed with a linear mixed effects model with degree of similarity to original CS, US category, drinking level, and age as predictors, with time spent doing the task as a covariate of no interest.
 P_traceplot_gen_gs <- ggplot(combined_gen_gs %>% filter(stim!="novel", subject!="H001"), aes(x=time, y=ps_cor, color=as.factor(diss))) + 
@@ -619,22 +665,7 @@ P_traceplot_gen_gs <- ggplot(combined_gen_gs %>% filter(stim!="novel", subject!=
   labs(x = "Time", y = "Pupil dilation", color = "Dissimilarity") +
   theme_minimal()
 
-# alc_cs = list(deg0 = rnorm(100), deg10 = rnorm(100), deg20 = rnorm(100))
-# neut_cs = list(deg0 = rnorm(100), deg10 = rnorm(100), deg20 = rnorm(100))
-# 
-# alc_cs.df <- alc_cs %>% as.data.frame() %>% mutate(cs_type = "alc", timing = c(1:100))
-# neut_cs.df <- neut_cs %>% as.data.frame() %>% mutate(cs_type = "neut", timing = c(1:100))
-# 
-# mult_cs.df <- rbind(alc_cs.df, neut_cs.df)
-# 
-# mult_cs.df %>% 
-#   pivot_longer(c(1:3), values_to = "pupil_area", names_to = "deg") %>%
-#   ggplot(aes(x = timing, y = pupil_area, color = deg)) +
-#   geom_line() +
-#   facet_grid(~cs_type) +
-#   theme_classic()
-
-ggplot(combined_gen_gs %>% filter(stim!="novel", subject!="H001"), aes(x=time, y=ps_cor, color=stim)) + 
+ggplot(combined_gen_gs %>% filter(stim!="novel", subject!="H001"), aes(x=time, y=ps_cor, color=stim)) +
      geom_smooth() + 
      facet_grid(~ as.factor(diss), scales = "free_y") + 
      labs(x = "Time", y = "Pupil dilation", color = "Dissimilarity") +
