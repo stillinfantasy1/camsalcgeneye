@@ -93,17 +93,16 @@ nrow(preprocessed_cond_cs)
 # For an aggregate view across subjects to highlight general trends rather than individual variations, we calcualte the mean size at each time point for each condition. This provides a representation of how the average pupil dilation changes over time in response to each stimulus type.
 
 # Time-course
-# trace_plot_cond_cs <- combined_cond_cs %>%
-#   filter(stim %in% c("alc", "neut", "null")) %>%
-#   group_by(drink_2grp, time, stim) %>%
-#   summarise(avg_ps = mean(ps_cor, na.rm = TRUE), .groups = 'drop')
+trace_plot_cond_cs <- combined_cond_cs %>%
+  filter(stim %in% c("alc", "neut", "null")) %>%
+  group_by(drink_2grp, time, stim) %>%
+  summarise(avg_ps = mean(ps_cor, na.rm = TRUE), .groups = 'drop')
 
 # check saccades frequency during window by stim
 
-P_trace_plot_cs <- ggplot(combined_cond_cs, aes(x = time, y = ps_cor, color = stim)) +
+P_trace_plot_cs <- ggplot(trace_plot_cond_cs, aes(x = time, y = avg_ps, color = stim)) +
   facet_grid(~ drink_2grp) +
-  # geom_line() +
-  geom_smooth(se=FALSE) +
+  geom_line() +
   labs(title = "Pupil dilation in response to CS presentation",
        x = "Time (s)",
        y = "Pupul dilation",
@@ -113,6 +112,15 @@ P_trace_plot_cs <- ggplot(combined_cond_cs, aes(x = time, y = ps_cor, color = st
   scale_color_manual(values = c("alc" = "#A06593", "neut" = "#6086C5", "null" = "grey")) +
   theme_classic()
 print(P_trace_plot_cs)
+
+```
+```{r}
+ggplot(combined_cond_cs %>% mutate(cstype = case_when(stim %in% c("alc", "neut") ~ "CS+", stim == "null" ~ "CS-", TRUE ~ NA_character_)), aes(x = time, y = ps_cor, color = cstype)) +
+  facet_grid(~ drink_2grp) +
+  # geom_line() +
+  geom_smooth(se=FALSE) +
+  scale_color_manual(values = c("CS+" = "#A06593", "CS-" = "grey")) +
+  theme_minimal()
 ```
 
 ```{r}
@@ -440,7 +448,7 @@ plot_model(lm_cond_cs, type = "eff", terms = c("iter", "stim"), axis.title = c("
   scale_color_manual(values = c("alc" = "#A06593", "neut" = "#6086C5", "null" = "grey")) +
   theme_classic()
 ```
-## Towardness
+## Towardness ~ cond
 ```{r}
 # Which subjects?
 subjects <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
@@ -616,17 +624,12 @@ plot(us_window, pupil = ps_cor, windows = F, geom = 'boxplot')
 ### Load behavior and pupil
 
 ```{r}
-# Which subjects?
-subjects <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
-
-excl_subjects <- c('L025')
-
-# Load pupil from Step 3
-preprocessed_gen_gs_path <- file.path(preproc_path, 'pupil_size', paste0('preprocessed_gen_gs.RData'))
-# Load existing preprocessed data if it exists
+preprocessed_gen_gs_path <- file.path(preproc_path, 'pupil_size', paste0('preprocessed_gen_gs_test.RData'))
 if (file.exists(preprocessed_gen_gs_path)) {
   load(preprocessed_gen_gs_path)
 }
+
+subjects <- unique(combined_data$subject)
 
 # Load behavior in generalization task
 behav_fname <- paste0(base_path, "/", "processed_behav", "/", "combined_generalization_data.csv")
@@ -646,26 +649,27 @@ behav_gen <- read_csv(behav_fname) %>%
 ### Combine behavior and pupil
 
 ```{r}
-combined_gen_gs <- left_join(processed_data, behav_gen, by = c("subject", "trial", "stim"))
+combined_gen_gs <- left_join(combined_data, behav_gen, by = c("subject", "trial", "stim"))
 
 combined_gen_gs$subject <- as.factor(combined_gen_gs$subject)
 combined_gen_gs$time <- as.numeric(as.character(combined_gen_gs$time))
 # Quick check to ensure row counts are as expected
 nrow(combined_gen_gs)
-nrow(processed_data)
+nrow(combined_data)
 ```
 
 ### Pupil response after gs onset by stimulus-type
 
 ```{r}
 # Card-evoked pupil dilation will be analyzed with a linear mixed effects model with degree of similarity to original CS, US category, drinking level, and age as predictors, with time spent doing the task as a covariate of no interest.
-P_traceplot_gen_gs <- ggplot(combined_gen_gs %>% filter(stim!="novel", subject!="H001"), aes(x=time, y=ps_cor, color=as.factor(diss))) + 
+P_traceplot_gen_gs <- ggplot(combined_gen_gs %>% filter(stim!="novel"), aes(x=time, y=ps_cor, color=as.factor(diss))) + 
   geom_smooth() + 
-  facet_grid(~ stim, scales = "free_y") + 
+  facet_grid(~ stim~drink_2grp, scales = "free_y") + 
   labs(x = "Time", y = "Pupil dilation", color = "Dissimilarity") +
   theme_minimal()
+print(P_traceplot_gen_gs)
 
-ggplot(combined_gen_gs %>% filter(stim!="novel", subject!="H001"), aes(x=time, y=ps_cor, color=stim)) +
+ggplot(combined_gen_gs %>% filter(stim!="novel"), aes(x=time, y=ps_cor, color=stim)) +
      geom_smooth() + 
      facet_grid(~ as.factor(diss), scales = "free_y") + 
      labs(x = "Time", y = "Pupil dilation", color = "Dissimilarity") +
@@ -677,4 +681,53 @@ ggplot(combined_gen_gs %>% filter(stim!="novel", subject!="H001"), aes(x=time, y
 pdf(file = 'P_traceplot_gen_gs.pdf', width = 8, height = 4, useDingbats = F)
 print(P_traceplot_gen_gs)
 dev.off()
+```
+
+## Towardness ~ gen
+
+``` {r}
+fix_norm <- fix_corr %>%
+  group_by(subject, trial) %>%
+    # figure out expected position of US
+  mutate(expect_loc = ifelse(stim == "null", "none",
+                               ifelse(incong_loc == "FALSE", us_loc,
+                                      ifelse(us_loc=="right", "left",
+                                             ifelse(us_loc=="left", "right", NA))))) %>%
+  mutate(xp_norm.fix = (xp - fix_median) / fix_median, # positive = right, negative = left
+         towardness.fix = ifelse(expect_loc=="left", -1 * xp_norm.fix, 
+                               ifelse(expect_loc=="right", xp_norm.fix,
+                                           ifelse(expect_loc == "none", NA, NA)))) %>%
+  ungroup()
+
+# smooth_fix_norm <- fix_norm %>%
+#   group_by(subject, trial) %>%
+#   mutate(smoothed_towardness.fix = ifelse(is.na(towardness.fix), NA, 
+#                                           stats::filter(towardness.fix, kernel, sides = 2))) %>%
+#   ungroup()
+         
+```
+
+```{r}
+preprocessed_towardness <- file.path(preproc_path, "gaze", "preprocessed_cond_towardness.RData")
+load(preprocessed_towardness)
+
+P_cond_towardness <- ggplot(fix_norm %>% filter(stim != "null"), aes(x = time, y = towardness.fix, color = stim)) + geom_smooth(se = TRUE) + labs(y="Towardness", x="Time") + scale_color_manual(values = c("alc" = "#A06593", "neut" = "#6086C5")) + theme_classic() + geom_hline(yintercept = 0)
+
+P_cond_sidebias <- ggplot(fix_norm %>% filter(stim == "null"), aes(x = time, y = xp_norm.fix, color = stim)) + geom_smooth(se = FALSE) + labs(y="Towardness", x="Time") + scale_color_manual(values = c("null" = "grey")) + theme_classic() + geom_hline(yintercept = 0)
+
+```
+
+```{r}
+# Save the figure
+pdf(file = 'P_cond_towardness.pdf', width = 4, height = 4, useDingbats = F)
+print(P_cond_towardness)
+dev.off()
+
+pdf(file = 'P_cond_sidebias.pdf', width = 4, height = 4, useDingbats = F)
+print(P_cond_sidebias)
+dev.off()
+
+# Save the file
+output_towardness_path <- file.path(base_path, "pupillometry", "preprocessed", "gaze", "preprocessed_cond_towardness.RData")
+save(fix_norm, file = output_towardness_path)
 ```
