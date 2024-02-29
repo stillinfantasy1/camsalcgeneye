@@ -697,15 +697,17 @@ dev.off()
 # Which subjects?
 subjects <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
 
-excl_subjects <- c('L025')
-
-# In what sample rate?
-s_rate_500 <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001')
-s_rate_250 <- c('L013', 'L014', 'L015', 'L017', 'L019', 'H002', 'H003')
-s_rate_1000 <- c('L025', 'L031')
-
 # Define paths
 base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+
+# Input
+trial_split_path <- file.path(base_path, "pupillometry", "restructured", "trial_split")
+
+# Output
+preproc_path <- file.path(base_path, "pupillometry", "preprocessed")
+if (!dir.exists(preproc_path)) {
+  dir.create(preproc_path)
+}
 ```
 
 ```{r}
@@ -733,7 +735,8 @@ for (subject in subjects) {
 save(append_gen_ant, file = append_gen_ant_path)
 
 # USE THIS: gaze during anticiaption
-append_gen_ant_df <- bind_rows(append_gen_ant, .id = "subject")
+
+append_gen_ant_df <- bind_rows(append_gen_ant)
 
 # Load fixation data
 append_gen_fix_path <- file.path(preproc_path, "gaze", "append_gen_fix.RData")
@@ -817,23 +820,34 @@ recode_behav_cond <- behav_cond %>%
   ), .groups = 'drop') %>%
   distinct() %>%
   na.omit()
+
+combined_gen_ant <- fix_corr %>%
+  left_join(recode_behav_cond, by = c("subject", "stim")) %>%
+  mutate(expect_loc = case_when(
+    stim == "novel" ~ "none",
+    stim == "null" ~ "none",
+    TRUE ~ expect_loc
+  ))
   
-fix_norm <- fix_corr %>%
+fix_norm <- combined_gen_ant %>%
   group_by(subject, trial) %>%
     # figure out expected position of US
-  mutate(expect_loc = ifelse(stim == "null", "none",
-                               ifelse(incong_loc == "FALSE", us_loc,
-                                      ifelse(us_loc=="right", "left",
-                                             ifelse(us_loc=="left", "right", NA))))) %>%
+  mutate(expect_loc = case_when(stim == "null" ~ "none",
+                                stim == "novel" ~ "none", TRUE ~ expect_loc)) %>%
   mutate(xp_norm.fix = (xp - fix_median) / fix_median, # positive = right, negative = left
          towardness.fix = ifelse(expect_loc=="left", -1 * xp_norm.fix, 
                                ifelse(expect_loc=="right", xp_norm.fix,
                                            ifelse(expect_loc == "none", NA, NA)))) %>%
   ungroup()
+```
 
+```{r}
+preprocessed_towardness <- file.path(preproc_path, "gaze", "preprocessed_gen_towardness.RData")
+load(preprocessed_towardness)
 
+P_gen_towardness <- ggplot(fix_norm %>% filter(stim %in% c("alc", "neut")), aes(x = time, y = towardness.fix, color = stim)) + geom_smooth(se = TRUE) + labs(y="Towardness", x="Time") + scale_color_manual(values = c("alc" = "#A06593", "neut" = "#6086C5")) + theme_classic() + geom_hline(yintercept = 0)
 
-
+P_cond_sidebias <- ggplot(fix_norm %>% filter(stim == "null"), aes(x = time, y = xp_norm.fix, color = stim)) + geom_smooth(se = FALSE) + labs(y="Towardness", x="Time") + scale_color_manual(values = c("null" = "grey")) + theme_classic() + geom_hline(yintercept = 0)
 
 ```
 
@@ -842,42 +856,15 @@ preprocessed_gen_gaze_path <- file.path(preproc_path, "gaze", "preprocessed_gen_
 if (file.exists(preprocessed_gen_gs_path)) {
   load(preprocessed_gen_gs_path)
 }
-
-gen_twd <- gen_gaze_w_loc %>%
-  group_by(subject, trial) %>%
-    # figure out expected position of US
-  # mutate(expect_loc = ifelse(stim == "null", "none",
-  #                              ifelse(incong_loc == "FALSE", us_loc,
-  #                                     ifelse(us_loc=="right", "left",
-  #                                            ifelse(us_loc=="left", "right", NA))))) %>%
-  mutate(xp_norm = (xp - fix_median) / fix_median, # positive = right, negative = left
-         towardness = ifelse(expect_loc=="left", -1 * xp_norm, 
-                               ifelse(expect_loc=="right", xp_norm,
-                                           ifelse(expect_loc == "none", NA, NA)))) %>%
-  ungroup()
-
-# smooth_fix_norm <- fix_norm %>%
-#   group_by(subject, trial) %>%
-#   mutate(smoothed_towardness.fix = ifelse(is.na(towardness.fix), NA, 
-#                                           stats::filter(towardness.fix, kernel, sides = 2))) %>%
-#   ungroup()
          
 ```
 
-```{r}
-preprocessed_towardness <- file.path(preproc_path, "gaze", "preprocessed_gen_towardness.RData")
-load(preprocessed_towardness)
 
-P_gen_towardness <- ggplot(gen_twd %>% filter(stim %in% c("alc", "neut")), aes(x = time, y = towardness, color = stim)) + geom_smooth(se = FALSE) + labs(y="Towardness", x="Time") + facet_grid(~ gs_deg) + scale_color_manual(values = c("alc" = "#A06593", "neut" = "#6086C5")) + theme_classic() + geom_hline(yintercept = 0)
-
-P_gen_sidebias <- ggplot(gen_twd %>% filter(stim %in% c("null", "novel")), aes(x = time, y = xp_norm, color = stim)) + geom_smooth(se = FALSE) + labs(y="Towardness", x="Time") + scale_color_manual(values = c("null" = "grey", "novel" = "black")) + theme_classic() + geom_hline(yintercept = 0)
-
-```
 
 ```{r}
 # Save the figure
-pdf(file = 'P_cond_towardness.pdf', width = 4, height = 4, useDingbats = F)
-print(P_cond_towardness)
+pdf(file = 'P_gen_towardness.pdf', width = 4, height = 4, useDingbats = F)
+print(P_gen_towardness)
 dev.off()
 
 pdf(file = 'P_cond_sidebias.pdf', width = 4, height = 4, useDingbats = F)
