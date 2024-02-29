@@ -822,6 +822,7 @@ preproc_path <- file.path(base_path, "pupillometry", "preprocessed")
 if (!dir.exists(preproc_path)) {
   dir.create(preproc_path)
 }
+preprocessed_gen_gaze_path <- file.path(preproc_path, "gaze", "preprocessed_gen_gaze.RData")
 
 subjects <- unique(combined_data$subject)
 # subjects <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L028', 'L029')
@@ -901,7 +902,8 @@ fix_median <- append_gen_fix %>%
   ungroup()
 
 fix_corr <- smooth_data %>%
-  left_join(fix_median, by = c("subject", "trial"))
+  left_join(fix_median, by = c("subject", "trial")) %>%
+  rename(stim = trial_cat)
 ```
 
 ```{r}
@@ -915,7 +917,6 @@ recode_behav_cond <- behav_cond %>%
          stim %in% c('alc', 'neut')) %>%
   group_by(subject, stim) %>%
   summarize(expect_loc = case_when(
-    stim == "null" ~ "none",
     incong_loc == FALSE & stim == "neut" ~ us_loc,
     incong_loc == FALSE & stim == "alc" ~ us_loc,
     TRUE ~ NA_character_
@@ -925,7 +926,15 @@ recode_behav_cond <- behav_cond %>%
 
 # Add expect location info to gaze dataframe
 gen_gaze_w_loc <- fix_corr %>%
-  left_join(recode_behav_cond)
+  left_join(recode_behav_cond, by = c("subject", "stim")) %>%
+  mutate(expect_loc = case_when(
+    stim == "novel" ~ "none",
+    stim == "null" ~ "none",
+    TRUE ~ expect_loc
+  ))
+
+
+save(gen_gaze_w_loc, file = preprocessed_gen_gaze_path)
 ```
 
 

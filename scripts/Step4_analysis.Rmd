@@ -114,6 +114,7 @@ P_trace_plot_cs <- ggplot(trace_plot_cond_cs, aes(x = time, y = avg_ps, color = 
 print(P_trace_plot_cs)
 
 ```
+
 ```{r}
 ggplot(combined_cond_cs %>% mutate(cstype = case_when(stim %in% c("alc", "neut") ~ "CS+", stim == "null" ~ "CS-", TRUE ~ NA_character_)), aes(x = time, y = ps_cor, color = cstype)) +
   facet_grid(~ drink_2grp) +
@@ -131,7 +132,9 @@ dev.off()
 ```
 
 ### Pre/Post incongruent pupil response
+
 #### Method 2
+
 ```{r}
 # Understand how pupil size changes around trials where the US location is incongruent with the usual reinforcement location.
 
@@ -211,6 +214,7 @@ ggplot(pre_post_incong_out, aes(x = time, y = ps_cor, color = incong_loc_timing)
 ```
 
 #### Method 1
+
 ```{r}
 # Compare pre vs post incongruent trials
 # unique instances of trials for each subject and stimulus type, focusing on whether the trial was incongruent or not
@@ -448,7 +452,9 @@ plot_model(lm_cond_cs, type = "eff", terms = c("iter", "stim"), axis.title = c("
   scale_color_manual(values = c("alc" = "#A06593", "neut" = "#6086C5", "null" = "grey")) +
   theme_classic()
 ```
+
 ## Towardness ~ cond
+
 ```{r}
 # Which subjects?
 subjects <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
@@ -620,7 +626,9 @@ plot(us_window, pupil = ps_cor, windows = F, geom = 'boxplot')
 ```
 
 # Generalization
+
 ## GS onset
+
 ### Load behavior and pupil
 
 ```{r}
@@ -685,7 +693,131 @@ dev.off()
 
 ## Towardness ~ gen
 
-``` {r}
+```{r}
+# Which subjects?
+subjects <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
+
+excl_subjects <- c('L025')
+
+# In what sample rate?
+s_rate_500 <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001')
+s_rate_250 <- c('L013', 'L014', 'L015', 'L017', 'L019', 'H002', 'H003')
+s_rate_1000 <- c('L025', 'L031')
+
+# Define paths
+base_path <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
+```
+
+```{r}
+# Load anticipation data
+append_gen_ant_path <- file.path(preproc_path, "gaze", "append_gen_ant.RData")
+append_gen_ant <- list()
+if (file.exists(append_gen_ant_path)) {
+  load(append_gen_ant_path)
+}
+
+for (subject in subjects) {
+  input_path <- file.path(trial_split_path, subject, paste0(subject, "_gen_split.RData"))
+  data <- load(input_path)
+  ant <- subject_phases_list$ant_onset %>%
+    rename(trial = trial_num,
+           stim = trial_cat,
+           diss = gs_deg) %>%
+    group_by(trial) %>%
+    mutate(time = (row_number() - 1) / 1000 * 2) %>%
+    ungroup() %>%
+    select(subject, time, xp, yp, ps, trial, stim, diss, drink_2grp)
+    
+  append_gen_ant[[subject]] <- ant
+}
+save(append_gen_ant, file = append_gen_ant_path)
+
+# USE THIS: gaze during anticiaption
+append_gen_ant_df <- bind_rows(append_gen_ant, .id = "subject")
+
+# Load fixation data
+append_gen_fix_path <- file.path(preproc_path, "gaze", "append_gen_fix.RData")
+append_gen_fix <- list()
+if (file.exists(append_gen_fix_path)) {
+  load(append_gen_fix_path)
+}
+for (subject in subjects) {
+  input_path <- file.path(trial_split_path, subject, paste0(subject, "_gen_split.RData"))
+  data <- load(input_path)
+  fix <- subject_phases_list$fixation %>%
+    rename(trial = trial_num,
+           stim = trial_cat,
+           diss = gs_deg) %>%
+    group_by(trial) %>%
+    mutate(time = (row_number() - 1) / 1000 * 2) %>%
+    ungroup() %>%
+    select(subject, time, xp, yp, ps, trial, stim, diss, drink_2grp)
+  
+  append_gen_fix[[subject]] <- fix
+}
+save(append_gen_fix, file = append_gen_fix_path)
+
+# USE THIS: gaze during fixation
+append_gen_fix_df <- bind_rows(append_gen_fix)
+```
+
+```{r}
+gaussian_kernel <- function(sd, len = 30) {
+  seq <- seq(-len/2, len/2, length.out = len)
+  kernel <- dnorm(seq, mean = 0, sd = sd)
+  kernel / sum(kernel)
+}
+sd_points <- 5  # Standard deviation in terms of data points
+kernel <- gaussian_kernel(sd = sd_points)
+```
+
+```{r}
+# Before averaging across participants, gaze time courses were smoothed by a Gaussian kernel with a 10 ms s.d. (Ede et al., 2019)
+
+# Linear Interpolation on the raw data to fill in missing values.
+# Gaussian Kernel Smoothing of the interpolated data to reduce noise.
+# Normalization of the smoothed data using a baseline period to control for individual differences.
+# Calculation of towardness from the smoothed and normalized data.
+
+Sdata <- make_pupillometryr_data(data = append_gen_ant_df, subject = subject, trial = trial, time = time, condition = stim)
+
+missing <- calculate_missing_data(Sdata, pupil = xp)
+excl_data <- clean_missing_data(Sdata,
+                                pupil = xp,
+                                trial_threshold = .75,
+                                subject_trial_threshold =.75)
+int_data <- interpolate_data(data = excl_data, pupil = xp, type = "linear")
+
+smooth_data <- int_data %>%
+  group_by(subject, trial) %>%
+  mutate(xp = ifelse(is.na(xp), NA, 
+                                          stats::filter(xp, kernel, sides = 2))) %>%
+  ungroup()
+
+fix_median <- append_gen_fix_df %>%
+  group_by(subject, trial) %>%
+  summarize(fix_median = median(xp, na.rm = TRUE)) %>%
+  ungroup()
+
+fix_corr <- smooth_data %>%
+  left_join(fix_median, by = c("subject", "trial"))
+
+# Find the expect location for each subject and stimulus during gen task based on cond task
+behav_fname <- paste0(base_path, "/", "processed_behav", "/", "combined_conditioning_data.csv")
+behav_cond <- read_csv(behav_fname)
+recode_behav_cond <- behav_cond %>%
+  rename(trial = trial_num,
+         subject = subId) %>%
+  filter(subject %in% subjects) %>%
+  group_by(subject, stim) %>%
+  summarize(expect_loc = case_when(
+    incong_loc == FALSE & stim == "neut" ~ us_loc,
+    incong_loc == FALSE & stim == "alc" ~ us_loc,
+    TRUE ~ NA_character_
+  ), .groups = 'drop') %>%
+  distinct() %>%
+  na.omit()
+  
 fix_norm <- fix_corr %>%
   group_by(subject, trial) %>%
     # figure out expected position of US
@@ -699,6 +831,31 @@ fix_norm <- fix_corr %>%
                                            ifelse(expect_loc == "none", NA, NA)))) %>%
   ungroup()
 
+
+
+
+
+```
+
+```{r}
+preprocessed_gen_gaze_path <- file.path(preproc_path, "gaze", "preprocessed_gen_gaze.RData")
+if (file.exists(preprocessed_gen_gs_path)) {
+  load(preprocessed_gen_gs_path)
+}
+
+gen_twd <- gen_gaze_w_loc %>%
+  group_by(subject, trial) %>%
+    # figure out expected position of US
+  # mutate(expect_loc = ifelse(stim == "null", "none",
+  #                              ifelse(incong_loc == "FALSE", us_loc,
+  #                                     ifelse(us_loc=="right", "left",
+  #                                            ifelse(us_loc=="left", "right", NA))))) %>%
+  mutate(xp_norm = (xp - fix_median) / fix_median, # positive = right, negative = left
+         towardness = ifelse(expect_loc=="left", -1 * xp_norm, 
+                               ifelse(expect_loc=="right", xp_norm,
+                                           ifelse(expect_loc == "none", NA, NA)))) %>%
+  ungroup()
+
 # smooth_fix_norm <- fix_norm %>%
 #   group_by(subject, trial) %>%
 #   mutate(smoothed_towardness.fix = ifelse(is.na(towardness.fix), NA, 
@@ -708,12 +865,12 @@ fix_norm <- fix_corr %>%
 ```
 
 ```{r}
-preprocessed_towardness <- file.path(preproc_path, "gaze", "preprocessed_cond_towardness.RData")
+preprocessed_towardness <- file.path(preproc_path, "gaze", "preprocessed_gen_towardness.RData")
 load(preprocessed_towardness)
 
-P_cond_towardness <- ggplot(fix_norm %>% filter(stim != "null"), aes(x = time, y = towardness.fix, color = stim)) + geom_smooth(se = TRUE) + labs(y="Towardness", x="Time") + scale_color_manual(values = c("alc" = "#A06593", "neut" = "#6086C5")) + theme_classic() + geom_hline(yintercept = 0)
+P_gen_towardness <- ggplot(gen_twd %>% filter(stim %in% c("alc", "neut")), aes(x = time, y = towardness, color = stim)) + geom_smooth(se = FALSE) + labs(y="Towardness", x="Time") + facet_grid(~ gs_deg) + scale_color_manual(values = c("alc" = "#A06593", "neut" = "#6086C5")) + theme_classic() + geom_hline(yintercept = 0)
 
-P_cond_sidebias <- ggplot(fix_norm %>% filter(stim == "null"), aes(x = time, y = xp_norm.fix, color = stim)) + geom_smooth(se = FALSE) + labs(y="Towardness", x="Time") + scale_color_manual(values = c("null" = "grey")) + theme_classic() + geom_hline(yintercept = 0)
+P_gen_sidebias <- ggplot(gen_twd %>% filter(stim %in% c("null", "novel")), aes(x = time, y = xp_norm, color = stim)) + geom_smooth(se = FALSE) + labs(y="Towardness", x="Time") + scale_color_manual(values = c("null" = "grey", "novel" = "black")) + theme_classic() + geom_hline(yintercept = 0)
 
 ```
 
