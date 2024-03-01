@@ -34,11 +34,11 @@ if (file.exists(saccade_cond_cs_path)) {
   load(saccade_cond_cs_path)
 }
 
-subjects <- c("L024", "L003")
+subjects <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
 
 single_edf <- c('H001', 'H002', 'H003','L003','L004','L006','L007','L009','L013','L014','L015','L017','L019')
 
-split_edf <- c('L021', 'L022','L024','L025','L026','L028','L029','L031')
+split_edf <- c('L021','L022','L024','L025','L026','L027', 'L028','L029','L031')
 
 for (subject in subjects) {
   if (subject %in% single_edf) {
@@ -116,7 +116,10 @@ for (subject in subjects) {
   subject_df <- cs_onset_df %>%
     group_by(block) %>%
     summarize(count = sum(!is.na(dur)),
-              mpv = mean(pv[!is.na(dur)], na.rm = TRUE), .groups = 'drop') %>%
+              mpv = mean(pv[!is.na(dur)], na.rm = TRUE),
+              max_pv = ifelse(all(is.na(pv[!is.na(dur)])), NA, max(pv[!is.na(dur)], na.rm = TRUE)), 
+              min_pv = ifelse(all(is.na(pv[!is.na(dur)])), NA, min(pv[!is.na(dur)], na.rm = TRUE)),
+              .groups = 'drop') %>%
     mutate(subject = subject,
            block = block - 40) %>%
     rename(trial = block, sacc_count = count)

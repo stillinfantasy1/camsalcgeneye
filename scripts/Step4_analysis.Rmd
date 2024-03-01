@@ -75,7 +75,6 @@ n_distinct(recode_behav_cond$subject)
 ```
 
 ### Combine behavior and pupil
-
 ```{r}
 combined_cond_cs <- left_join(preprocessed_cond_cs, recode_behav_cond, by = c("subject", "trial", "stim"))
 
@@ -86,6 +85,49 @@ combined_cond_cs$time <- as.numeric(as.character(combined_cond_cs$time))
 nrow(combined_cond_cs)
 nrow(preprocessed_cond_cs)
 ```
+
+### Saccades and peak velocity during cs presentation
+```{r}
+# How do saccadic movements and their velocities differ in response to reward-related vs. non-reward stimuli, or alcohol vs non-alcohol?
+
+saccade_cond_cs_path <- file.path(preproc_path, "pupil_size","saccade_cond_cs.RData")
+if (file.exists(saccade_cond_cs_path)) {
+  load(saccade_cond_cs_path)
+}
+
+subjects <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
+
+sacc_behav <- behav_cond %>%
+  filter(subject %in% subjects) %>%
+  rename(trial = trial_num,
+         subject = subId) %>%
+  select(subject, trial, stim, iter, drink_2grp)
+
+sacc_cond_cs <- saccade_cs_onset %>%
+  bind_rows() %>%
+  left_join(sacc_behav, by = c("subject", "trial"))
+
+avg_sacc_metrics <- sacc_cond_cs %>%
+  filter(subject != "H001") %>%
+  group_by(subject, stim) %>%
+  summarize(
+    avg_sacc = mean(sacc_count, na.rm = TRUE),
+    avg_mpv = mean(mpv, na.rm = TRUE),
+    avg_max_pv = mean(max_pv, na.rm = TRUE),
+    avg_min_pv = mean(min_pv, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+ggplot(avg_sacc_metrics, aes(x = stim, y = avg_sacc, fill = stim)) +
+  # geom_boxplot() +
+  stat_summary(fun = mean, geom = "bar") +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0) +
+  labs(x = "CS stimulus",
+       y = "Saccades") +
+  scale_fill_manual(values = c("alc" = "#A06593", "neut" = "#6086C5", "null" = "grey")) +
+  theme_minimal()
+```
+
 
 ### Pupil response after cs onset by stimulus-type
 
@@ -204,6 +246,9 @@ pre_post_incong_out <- combined_cond_cs %>%
     post_incong_outcome == 1 ~ "post",
     TRUE ~ as.character(NA))) %>%
   filter(!is.na(incong_loc_timing), stim != "null")
+
+# omit double-counted trials
+# table(pre_post_incong_loc[pre_post_incong_loc$subject=='L006',]$trial, rowSums(cbind(pre_post_incong_loc[pre_post_incong_loc$subject=='L006',]$pre_incong_loc, pre_post_incong_loc[pre_post_incong_loc$subject=='L006',]$post_incong_loc))) << if anything is in the '2' column, it is double-counted
 
 # Plotting
 ggplot(pre_post_incong_out, aes(x = time, y = ps_cor, color = incong_loc_timing)) +
@@ -694,6 +739,7 @@ dev.off()
 ## Towardness ~ gen
 
 ```{r}
+# two plots, each contains diss for one stimulus
 # Which subjects?
 subjects <- c('L003', 'L004', 'L006', 'L007', 'L009', 'L020', 'L021', 'H001', 'L022', 'L024', 'L026', 'L027', 'L028', 'L029')
 
@@ -847,7 +893,7 @@ load(preprocessed_towardness)
 
 P_gen_towardness <- ggplot(fix_norm %>% filter(stim %in% c("alc", "neut")), aes(x = time, y = towardness.fix, color = stim)) + geom_smooth(se = TRUE) + labs(y="Towardness", x="Time") + scale_color_manual(values = c("alc" = "#A06593", "neut" = "#6086C5")) + theme_classic() + geom_hline(yintercept = 0)
 
-P_cond_sidebias <- ggplot(fix_norm %>% filter(stim == "null"), aes(x = time, y = xp_norm.fix, color = stim)) + geom_smooth(se = FALSE) + labs(y="Towardness", x="Time") + scale_color_manual(values = c("null" = "grey")) + theme_classic() + geom_hline(yintercept = 0)
+P_gen_sidebias <- ggplot(fix_norm %>% filter(stim %in% c("null", "novel")), aes(x = time, y = xp_norm.fix, color = stim)) + geom_smooth(se = TRUE) + labs(y="Towardness", x="Time") + scale_color_manual(values = c("null" = "grey", "novel" = "grey23")) + theme_classic() + geom_hline(yintercept = 0)
 
 ```
 
@@ -875,3 +921,120 @@ dev.off()
 output_towardness_path <- file.path(base_path, "pupillometry", "preprocessed", "gaze", "preprocessed_cond_towardness.RData")
 save(fix_norm, file = output_towardness_path)
 ```
+# Behavior
+```{r}
+home_dir <- '/Users/bai/Library/CloudStorage/Box-Box/'
+# home_dir <- '~/Library/CloudStorage/Box-Box/'
+proj_dir <- paste0(home_dir, 'CAMSLab_Projects/Studies/AlcGen/')
+data_dir <- paste0(proj_dir, 'Data/In_Lab/processed_behav/') # update to include more subj later
+conditioning_concat_export <- read.csv(paste0(data_dir, 'combined_conditioning_data.csv'))
+gen_concat_export <- read.csv(paste0(data_dir, 'combined_generalization_data.csv'))
+lucky_concat_export <- read.csv(paste0(data_dir, 'combined_rating_data.csv'))
+combined_usmem_data <- read.csv(paste0(data_dir, 'combined_usmem_data.csv'))
+combined_csmem_data <- read.csv(paste0(data_dir, 'combined_csmem_data.csv'))
+
+# redefine variables for later use
+conditioning_concat <- conditioning_concat_export
+lucky_concat <- lucky_concat_export
+gen_concat <- gen_concat_export
+usmem_concat <- combined_usmem_data
+csmem_concat <- combined_csmem_data
+#mem_concat <- mem_concat_export
+#survey_dat <- survey_dat_export %>% mutate(education = as.numeric(education))
+
+# so far, manually adding ages
+age_df <- data.frame(subId = c('L003', 'L004', 'L005', 'L006', 'L007',  'L009',  'L011', 'L012', 'L013', 'L014', 'L015',
+                               'H001', 'H002',  'H003'),
+                     age = c(23, 36, 47, 69, 76, 54, 41, 26, 37, 22, 27,
+                             67, 41, 68)
+                     )
+# would need to export regularly from RedCap to ensure subId and age list are updated, but saved in box under analysis_live
+
+
+# define luckiness data (conditioning)
+cs_img_info <- conditioning_concat %>% filter(stim %in% c("alc", "neut", "null")) %>%
+  select(c("drink_2grp", "subId", "stim", "cs_img")) %>% distinct()
+cs_img_info <- cs_img_info %>%
+  mutate(cs_img_name = ifelse(startsWith(str_sub(cs_img_info$cs_img,-11), "V") ,str_sub(cs_img_info$cs_img,-11),str_sub(cs_img_info$cs_img,-10)))
+
+lucky_concat <- lucky_concat %>%
+rename(cs_img_name = stim)
+
+lucky_concat$drink_2grp <- NA
+lucky_concat[grepl("L",lucky_concat$subId),]$drink_2grp <- "light"
+lucky_concat[grepl("H",lucky_concat$subId),]$drink_2grp <- "heavy"
+lucky_compare <- merge(lucky_concat, cs_img_info, by = c("subId", "cs_img_name","drink_2grp")) %>%
+  mutate(timing = factor(timing, levels = c("pre", "post")),
+         response = as.numeric(response))
+
+img_luck_mod <- lme(response ~ timing*stim*drink_2grp, random=~1|subId, 
+                    dat = lucky_compare %>%
+                      mutate(timing = factor(timing, levels = c("pre", "post")),
+                             stim = factor(stim, levels = c("null", "alc", "neut"))), na.action = na.omit)
+
+car::Anova(img_luck_mod, type=2, test.statistic = "Wald")
+
+# posthoc
+emmeans(img_luck_mod, pairwise ~ timing|stim)$contrasts 
+# emmeans(img_luck_mod, pairwise ~ drink_2grp|timing|stim)$contrasts
+
+lucky_compare %>%
+  mutate(timing = factor(timing, levels = c("pre", "post")),
+         stim = factor(stim, levels = c("null", "alc", "neut"))) %>%
+  filter(subId %in% subjects) %>%
+  ggplot(aes(x = timing, y = response, fill = timing)) +
+  stat_summary(fun = mean, geom = "bar", position = "dodge", alpha = .8) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", position = position_dodge(0.9), width = 0) +
+  geom_point(position = position_dodge(0.9), alpha = .6, aes(color = timing), size = .5) +
+  geom_line(aes(group = subId), alpha = .4) +
+  facet_grid(.~stim) +
+  theme_classic()
+```
+```{r}
+# define choice data (generalization)
+gen_final <- gen_concat %>% filter(!(block=="prac")) %>%
+  mutate(stim = ifelse(grepl("alc", trial_cat), "alc",
+                       ifelse(grepl("neut", trial_cat), "neut",
+                              ifelse(grepl("null", trial_cat), "null",
+                                     ifelse(grepl("novel", trial_cat), "novel", NA))))) %>%
+  merge(cs_img_info %>% select(-c("drink_2grp")),
+        by = c("subId", "stim"), all.x = TRUE) %>%
+  mutate(play_bin = ifelse(gs_choice == -1, 0, 
+                           ifelse(gs_choice == 1, 1, NA)),
+         deg_plot = ifelse(gs_deg == 999, 0, gs_deg),
+         deg_scale = sjmisc::center(as.numeric(deg_plot)),
+         stim = factor(stim, levels = c('null', 'novel', 'neut', 'alc')))
+gen_final$drink_2grp <- ""
+gen_final[grepl("L",gen_final$subId),]$drink_2grp <- "light"
+gen_final[grepl("H",gen_final$subId),]$drink_2grp <- "heavy"
+
+# define RT data (generalization)
+probe_rt_dat <- gen_concat %>%
+  filter((trial_cat != "novel") & (block != "prac") & (probe_acc == 1)) %>%
+  mutate(gs_rt_log = log(gs_rt),
+         probe_rt_log = log(probe_rt)) %>%
+  mutate(deg_plot = ifelse(gs_deg == 999, 0, gs_deg),
+         trial_cat = factor(trial_cat, levels = c("neut","null", "alc"))) %>%
+  filter_all(any_vars(!is.na(.)))
+
+# choice generalization
+gen_final <- gen_final %>%
+  merge(age_df, by = "subId") %>%
+         mutate(drink_2grp = ifelse(grepl("L", subId), "light", "aud"))
+
+binmod_2grp_reward <- glm(play_bin ~ trial_cat*deg_plot*drink_2grp + age + (trial_num+1), 
+                          dat = gen_final %>% filter(!(trial_cat  %in% c("novel", "prac"))) %>%
+                            mutate(play_bin = ifelse(gs_choice == -1, 0, 
+                                                     ifelse(gs_choice == 1, 1, NA)),
+                                   deg_plot = ifelse(gs_deg == 999, 0, gs_deg), 
+                                   trial_cat = factor(trial_cat),
+                                   subId = factor(subId)),
+                          family = "binomial")
+
+summary(binmod_2grp_reward)
+car::Anova(binmod_2grp_reward, test.statistic = "Wald")
+plot_model(binmod_2grp_reward, type = "eff", terms = c("deg_plot", "trial_cat", "drink_2grp"))
+```
+
+
+
