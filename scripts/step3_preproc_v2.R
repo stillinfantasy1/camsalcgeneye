@@ -1,15 +1,16 @@
+subjects <- commandArgs(trailingOnly = TRUE)
 library(pacman)
 p_load(eyelinker, intervals, stringr, readr, dplyr, ggplot2, tidyverse, stringr, emmeans, sjPlot, nlme, patchwork, psych, zoo, magrittr, gazer, ggridges, cowplot)
 # https://github.com/dmirman/gazer/blob/master/vignettes/Pupil-vignette.Rmd
 # https://github.com/dmirman/gazer/blob/master/vignettes/blink_detection.Rmd
 
-subjects <- commandArgs(trailingOnly = TRUE)
 
 for (s in subjects) {
-  base_dir <- "/Users/bai/Library/CloudStorage/Box-Box/CAMSLab_Projects/Studies/AlcGen/Data/In_Lab"
-  behav_dir <- paste0(base_dir, "/processed_behav")
-  subj_dir <- paste0(base_dir, "/pupillometry/restructured/trial_split/", s)
-  preproc_dir <- paste0(base_dir, "/pupillometry/preprocessed/", s)
+  base_dir <- "/gpfs/project/goldfarb/shared/alcgen"
+  behav_dir <- paste0(base_dir, "/behavior")
+  eye_dir <- paste0(base_dir, "/eyetracking")
+  subj_dir <- paste0(eye_dir, "/subjects/reshaped/trial_split/", s)
+  preproc_dir <- paste0(base_dir, "/eyetracking/preprocessed/", s)
   
   check_and_create <- function(dir) {
     if (!dir.exists(dir)) {
